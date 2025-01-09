@@ -30,9 +30,7 @@ export default function Home() {
       if (typeof window !== 'undefined') {
         try {
           const pdfjs = await import('pdfjs-dist');
-          // Use a specific version of the worker from npm
-          const worker = await import('pdfjs-dist/build/pdf.worker.entry');
-          pdfjs.GlobalWorkerOptions.workerSrc = worker;
+          pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.js`;
           pdfjsLib = pdfjs;
         } catch (error) {
           console.error('Error loading PDF.js:', error);
