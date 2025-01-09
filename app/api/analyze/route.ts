@@ -73,6 +73,14 @@ async function getSummaryForChunk(chunk: string, retries = 3): Promise<string> {
   return '';
 }
 
+function cleanJsonString(str: string): string {
+  // Remove markdown formatting
+  str = str.replace(/```json\n?/g, '').replace(/```\n?/g, '');
+  // Remove any leading/trailing whitespace
+  str = str.trim();
+  return str;
+}
+
 export const runtime = 'edge'; // Use edge runtime for better streaming support
 
 export async function POST(req: Request) {
@@ -167,15 +175,15 @@ export async function POST(req: Request) {
           messages: [
             {
               role: "system",
-              content: "You are a document analyst. Provide a comprehensive analysis in JSON format."
+              content: "You are a document analyst. Provide a comprehensive analysis in JSON format. Return ONLY the JSON object without any markdown formatting or additional text."
             },
             {
               role: "user",
-              content: "Based on these summaries, provide a detailed analysis. Include key insights, potential issues, and recommendations in JSON format with keys: 'keyInsights', 'potentialIssues', and 'recommendations'. Aim for at least 3-5 points in each category.\n\n" + combinedSummary
+              content: "Based on these summaries, provide a detailed analysis. Include key insights, potential issues, and recommendations in JSON format with keys: 'keyInsights', 'potentialIssues', and 'recommendations'. Aim for at least 3-5 points in each category. Return ONLY the JSON object.\n\n" + combinedSummary
             }
           ],
           temperature: 0.3,
-          max_tokens: 1000, // Increased token limit for more detailed analysis
+          max_tokens: 1000,
         }, { signal: abortController.signal });
 
         clearTimeout(timeoutId);
@@ -185,17 +193,36 @@ export async function POST(req: Request) {
           throw new Error('Failed to generate analysis');
         }
 
+        // Clean and parse the JSON
+        const cleanedJson = cleanJsonString(analysisContent);
+        let parsedAnalysis;
+        try {
+          parsedAnalysis = JSON.parse(cleanedJson);
+          
+          // Validate the expected structure
+          if (!parsedAnalysis.keyInsights || !Array.isArray(parsedAnalysis.keyInsights) ||
+              !parsedAnalysis.potentialIssues || !Array.isArray(parsedAnalysis.potentialIssues) ||
+              !parsedAnalysis.recommendations || !Array.isArray(parsedAnalysis.recommendations)) {
+            throw new Error('Invalid analysis format');
+          }
+        } catch (parseError) {
+          console.error('JSON parsing error:', parseError, 'Content:', cleanedJson);
+          throw new Error('Failed to parse analysis response');
+        }
+
         await writeChunk({ 
           type: 'complete',
           summary: combinedSummary,
-          analysis: JSON.parse(analysisContent)
+          analysis: parsedAnalysis
         });
 
       } catch (error) {
         console.error('Processing error:', error);
         await writeChunk({ 
           type: 'error',
-          message: error instanceof Error ? error.message : 'Unknown error'
+          message: error instanceof Error ? 
+            `${error.message}${error.message.includes('JSON') ? ' - Please try again.' : ''}` : 
+            'Unknown error'
         });
       } finally {
         clearInterval(pingInterval);
