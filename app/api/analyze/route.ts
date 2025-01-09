@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import OpenAI from 'openai';
+import pdfParse from 'pdf-parse';
 
 interface StreamMessage {
   type: 'status' | 'progress' | 'complete' | 'error' | 'ping';
@@ -11,6 +12,12 @@ interface StreamMessage {
     potentialIssues: string[];
     recommendations: string[];
   };
+}
+
+interface FileContent {
+  type: 'pdf' | 'text';
+  content: string;
+  name: string;
 }
 
 const openai = new OpenAI({
@@ -164,10 +171,32 @@ export async function POST(req: Request) {
       throw new Error('OpenAI API key is not configured');
     }
 
-    const { content } = await req.json();
+    const fileData: FileContent = await req.json();
 
-    if (!content) {
+    if (!fileData.content) {
       throw new Error('No content provided');
+    }
+
+    let textContent: string;
+
+    if (fileData.type === 'pdf') {
+      try {
+        // Convert base64 to buffer
+        const pdfBuffer = Buffer.from(fileData.content, 'base64');
+        
+        // Parse PDF
+        const pdfData = await pdfParse(pdfBuffer);
+        textContent = pdfData.text;
+        
+        if (!textContent.trim()) {
+          throw new Error('PDF appears to be empty or unreadable');
+        }
+      } catch (error) {
+        console.error('PDF parsing error:', error);
+        throw new Error('Failed to parse PDF file. Please ensure the file is not corrupted or password protected.');
+      }
+    } else {
+      textContent = fileData.content;
     }
 
     // Create response stream with appropriate headers
@@ -185,7 +214,7 @@ export async function POST(req: Request) {
       try {
         startPing();
 
-        const chunks = splitIntoChunks(content);
+        const chunks = splitIntoChunks(textContent);
         await writeChunk({ type: 'status', message: `Processing ${chunks.length} chunks...` });
 
         const summaries: string[] = [];

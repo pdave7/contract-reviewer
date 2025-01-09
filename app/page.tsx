@@ -138,7 +138,35 @@ export default function Home() {
     try {
       const reader = new FileReader();
       reader.onload = async (e) => {
-        const text = e.target?.result as string;
+        let text: string;
+        const fileContent = e.target?.result;
+        
+        if (file.type === 'application/pdf') {
+          // For PDFs, we'll send the binary data to the backend
+          if (!(fileContent instanceof ArrayBuffer)) {
+            throw new Error('Failed to read PDF file');
+          }
+          
+          // Convert ArrayBuffer to Base64
+          const base64 = btoa(
+            new Uint8Array(fileContent)
+              .reduce((data, byte) => data + String.fromCharCode(byte), '')
+          );
+          
+          text = JSON.stringify({ 
+            type: 'pdf',
+            content: base64,
+            name: file.name
+          });
+        } else {
+          // For text files, send the content directly
+          text = JSON.stringify({
+            type: 'text',
+            content: e.target?.result as string,
+            name: file.name
+          });
+        }
+
         setStatus('Initializing analysis...');
         
         try {
@@ -157,7 +185,12 @@ export default function Home() {
         setLoading(false);
       };
 
-      reader.readAsText(file);
+      // Read as ArrayBuffer for PDFs, text for other files
+      if (file.type === 'application/pdf') {
+        reader.readAsArrayBuffer(file);
+      } else {
+        reader.readAsText(file);
+      }
     } catch (error) {
       setError('Error processing file: ' + (error instanceof Error ? error.message : 'Unknown error'));
       setStatus('');
