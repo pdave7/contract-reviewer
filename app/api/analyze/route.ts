@@ -1,6 +1,18 @@
 import { NextResponse } from 'next/server';
 import OpenAI from 'openai';
 
+interface StreamMessage {
+  type: 'status' | 'progress' | 'complete' | 'error';
+  message?: string;
+  progress?: number;
+  summary?: string;
+  analysis?: {
+    keyInsights: string[];
+    potentialIssues: string[];
+    recommendations: string[];
+  };
+}
+
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
@@ -52,7 +64,7 @@ export async function POST(req: Request) {
   const stream = new TransformStream();
   const writer = stream.writable.getWriter();
 
-  const writeChunk = async (data: any) => {
+  const writeChunk = async (data: StreamMessage) => {
     await writer.write(encoder.encode(JSON.stringify(data) + '\n'));
   };
 

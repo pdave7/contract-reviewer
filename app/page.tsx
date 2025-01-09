@@ -2,7 +2,6 @@
 
 import { useState } from 'react';
 import { useDropzone } from 'react-dropzone';
-import axios from 'axios';
 
 interface Analysis {
   keyInsights: string[];
