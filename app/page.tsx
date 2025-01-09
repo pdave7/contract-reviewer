@@ -39,19 +39,27 @@ export default function Home() {
     const checkConnection = setInterval(() => {
       if (Date.now() - lastPingTime > 15000) { // No ping for 15 seconds
         clearInterval(checkConnection);
-        throw new Error('Connection lost');
+        throw new Error('Connection lost - no ping received');
       }
     }, 1000);
+
+    let buffer = ''; // Buffer for incomplete chunks
 
     try {
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
-        const chunk = new TextDecoder().decode(value);
-        const lines = chunk.split('\n').filter(line => line.trim());
+        // Append new data to buffer and process complete lines
+        buffer += new TextDecoder().decode(value);
+        const lines = buffer.split('\n');
+        
+        // Keep the last incomplete line in the buffer
+        buffer = lines.pop() || '';
 
         for (const line of lines) {
+          if (!line.trim()) continue;
+          
           try {
             const data = JSON.parse(line);
             switch (data.type) {
@@ -72,17 +80,51 @@ export default function Home() {
                 setProgress(100);
                 break;
               case 'error':
-                setError(data.message);
-                setStatus('');
-                break;
+                throw new Error(data.message);
             }
           } catch (e) {
-            console.error('Error parsing stream chunk:', e);
+            console.error('Error processing line:', line, e);
+            if (e instanceof Error && e.message !== 'Connection lost - no ping received') {
+              throw e;
+            }
           }
         }
       }
     } finally {
       clearInterval(checkConnection);
+      reader.releaseLock();
+    }
+  };
+
+  const attemptAnalysis = async (text: string, attempt: number = 1): Promise<void> => {
+    const maxAttempts = 3;
+    const backoffDelay = Math.min(1000 * Math.pow(2, attempt - 1), 8000);
+
+    try {
+      const response = await fetch('/api/analyze', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ content: text }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      await processStream(response);
+      setRetryCount(0); // Reset retry count on success
+    } catch (error) {
+      console.error(`Attempt ${attempt} failed:`, error);
+      
+      if (attempt < maxAttempts) {
+        setStatus(`Connection issue. Retrying in ${backoffDelay/1000} seconds... (${attempt}/${maxAttempts})`);
+        await new Promise(resolve => setTimeout(resolve, backoffDelay));
+        return attemptAnalysis(text, attempt + 1);
+      }
+      
+      throw error;
     }
   };
 
@@ -99,41 +141,14 @@ export default function Home() {
         const text = e.target?.result as string;
         setStatus('Initializing analysis...');
         
-        const attemptAnalysis = async () => {
-          try {
-            const response = await fetch('/api/analyze', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({ content: text }),
-            });
-
-            if (!response.ok) {
-              throw new Error(`HTTP error! status: ${response.status}`);
-            }
-
-            await processStream(response);
-            setRetryCount(0); // Reset retry count on success
-          } catch (error) {
-            if (retryCount < maxRetries) {
-              setRetryCount(prev => prev + 1);
-              setStatus(`Connection lost. Retrying (${retryCount + 1}/${maxRetries})...`);
-              await new Promise(resolve => setTimeout(resolve, 2000));
-              await attemptAnalysis();
-            } else {
-              throw new Error('Failed to maintain connection after multiple attempts');
-            }
-          }
-        };
-
         try {
-          await attemptAnalysis();
+          await attemptAnalysis(text);
         } catch (error) {
           setError('Failed to analyze document: ' + (error instanceof Error ? error.message : 'Unknown error'));
           setStatus('');
+        } finally {
+          setLoading(false);
         }
-        setLoading(false);
       };
 
       reader.onerror = () => {

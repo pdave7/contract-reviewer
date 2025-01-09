@@ -42,6 +42,9 @@ function splitIntoChunks(text: string, maxChunkSize: number = 2000): string[] {
 async function getSummaryForChunk(chunk: string, retries = 3): Promise<string> {
   for (let attempt = 0; attempt < retries; attempt++) {
     try {
+      const abortController = new AbortController();
+      const timeoutId = setTimeout(() => abortController.abort(), 30000); // 30 seconds timeout
+
       const response = await openai.chat.completions.create({
         model: "gpt-4-turbo-preview",
         messages: [
@@ -56,10 +59,12 @@ async function getSummaryForChunk(chunk: string, retries = 3): Promise<string> {
         ],
         max_tokens: 150,
         temperature: 0.3,
-      });
+      }, { signal: abortController.signal });
 
+      clearTimeout(timeoutId);
       return response.choices[0].message.content || '';
     } catch (error) {
+      console.error(`Attempt ${attempt + 1} failed:`, error);
       if (attempt === retries - 1) throw error;
       // Wait before retrying (exponential backoff)
       await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 1000));
@@ -68,25 +73,33 @@ async function getSummaryForChunk(chunk: string, retries = 3): Promise<string> {
   return ''; // TypeScript needs this
 }
 
+export const runtime = 'edge'; // Use edge runtime for better streaming support
+
 export async function POST(req: Request) {
   const encoder = new TextEncoder();
   const stream = new TransformStream();
   const writer = stream.writable.getWriter();
 
   const writeChunk = async (data: StreamMessage) => {
-    await writer.write(encoder.encode(JSON.stringify(data) + '\n'));
+    try {
+      await writer.write(encoder.encode(JSON.stringify(data) + '\n'));
+    } catch (error) {
+      console.error('Error writing chunk:', error);
+      throw error;
+    }
   };
 
   // Initialize pingInterval with a no-op interval
   let pingInterval: NodeJS.Timeout = setInterval(() => {}, 0);
   clearInterval(pingInterval);
 
-  // Keep-alive ping function
+  // Keep-alive ping function with error handling
   const startPing = () => {
     pingInterval = setInterval(async () => {
       try {
         await writeChunk({ type: 'ping' });
       } catch (error) {
+        console.error('Ping failed:', error);
         clearInterval(pingInterval);
       }
     }, 5000); // Send ping every 5 seconds
@@ -103,19 +116,20 @@ export async function POST(req: Request) {
       throw new Error('No content provided');
     }
 
-    // Create response stream
+    // Create response stream with appropriate headers
     const response = new NextResponse(stream.readable, {
       headers: {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
         'Connection': 'keep-alive',
+        'Transfer-Encoding': 'chunked',
       },
     });
 
-    // Process in background
+    // Process in background with error handling
     (async () => {
       try {
-        startPing(); // Start sending keep-alive pings
+        startPing();
 
         const chunks = splitIntoChunks(content);
         await writeChunk({ type: 'status', message: `Processing ${chunks.length} chunks...` });
@@ -123,6 +137,7 @@ export async function POST(req: Request) {
         const summaries: string[] = [];
         for (let i = 0; i < chunks.length; i++) {
           try {
+            console.log(`Processing chunk ${i + 1} of ${chunks.length}`);
             const summary = await getSummaryForChunk(chunks[i]);
             summaries.push(summary);
             await writeChunk({ 
@@ -144,6 +159,9 @@ export async function POST(req: Request) {
         const combinedSummary = summaries.join('\n\n');
         await writeChunk({ type: 'status', message: 'Generating final analysis...' });
 
+        const abortController = new AbortController();
+        const timeoutId = setTimeout(() => abortController.abort(), 30000); // 30 seconds timeout
+
         const analysisResponse = await openai.chat.completions.create({
           model: "gpt-4-turbo-preview",
           messages: [
@@ -158,7 +176,9 @@ export async function POST(req: Request) {
           ],
           temperature: 0.3,
           max_tokens: 500,
-        });
+        }, { signal: abortController.signal });
+
+        clearTimeout(timeoutId);
 
         const analysisContent = analysisResponse.choices[0].message.content;
         if (!analysisContent) {
@@ -172,24 +192,34 @@ export async function POST(req: Request) {
         });
 
       } catch (error) {
+        console.error('Processing error:', error);
         await writeChunk({ 
           type: 'error',
           message: error instanceof Error ? error.message : 'Unknown error'
         });
       } finally {
-        clearInterval(pingInterval); // Stop sending pings
-        await writer.close();
+        clearInterval(pingInterval);
+        try {
+          await writer.close();
+        } catch (error) {
+          console.error('Error closing writer:', error);
+        }
       }
     })();
 
     return response;
 
   } catch (error) {
+    console.error('Initial error:', error);
     await writeChunk({ 
       type: 'error',
       message: error instanceof Error ? error.message : 'Unknown error'
     });
-    await writer.close();
+    try {
+      await writer.close();
+    } catch (closeError) {
+      console.error('Error closing writer:', closeError);
+    }
     return new NextResponse(
       JSON.stringify({ 
         success: false, 
