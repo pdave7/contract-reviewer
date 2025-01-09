@@ -28,8 +28,15 @@ export default function Home() {
   useEffect(() => {
     const loadPdfjs = async () => {
       if (typeof window !== 'undefined') {
-        pdfjsLib = await import('pdfjs-dist');
-        pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
+        try {
+          const pdfjs = await import('pdfjs-dist');
+          // Use a specific version of the worker from npm
+          const worker = await import('pdfjs-dist/build/pdf.worker.entry');
+          pdfjs.GlobalWorkerOptions.workerSrc = worker;
+          pdfjsLib = pdfjs;
+        } catch (error) {
+          console.error('Error loading PDF.js:', error);
+        }
       }
     };
     loadPdfjs();
