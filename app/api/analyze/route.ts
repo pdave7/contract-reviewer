@@ -18,7 +18,7 @@ const openai = new OpenAI({
 });
 
 // Function to split text into smaller chunks
-function splitIntoChunks(text: string, maxChunkSize: number = 2000): string[] {
+function splitIntoChunks(text: string, maxChunkSize: number = 10000): string[] {
   const chunks: string[] = [];
   let currentChunk = '';
   const sentences = text.match(/[^.!?]+[.!?]+/g) || [text];
@@ -43,7 +43,7 @@ async function getSummaryForChunk(chunk: string, retries = 3): Promise<string> {
   for (let attempt = 0; attempt < retries; attempt++) {
     try {
       const abortController = new AbortController();
-      const timeoutId = setTimeout(() => abortController.abort(), 30000); // 30 seconds timeout
+      const timeoutId = setTimeout(() => abortController.abort(), 60000); // 60 seconds timeout for larger chunks
 
       const response = await openai.chat.completions.create({
         model: "gpt-4-turbo-preview",
@@ -54,10 +54,10 @@ async function getSummaryForChunk(chunk: string, retries = 3): Promise<string> {
           },
           {
             role: "user",
-            content: "Summarize the key points from this document chunk in 50 words:\n\n" + chunk
+            content: "Summarize the key points from this document chunk in 150 words:\n\n" + chunk
           }
         ],
-        max_tokens: 150,
+        max_tokens: 400, // Increased token limit for larger summaries
         temperature: 0.3,
       }, { signal: abortController.signal });
 
@@ -70,7 +70,7 @@ async function getSummaryForChunk(chunk: string, retries = 3): Promise<string> {
       await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 1000));
     }
   }
-  return ''; // TypeScript needs this
+  return '';
 }
 
 export const runtime = 'edge'; // Use edge runtime for better streaming support
@@ -160,22 +160,22 @@ export async function POST(req: Request) {
         await writeChunk({ type: 'status', message: 'Generating final analysis...' });
 
         const abortController = new AbortController();
-        const timeoutId = setTimeout(() => abortController.abort(), 30000); // 30 seconds timeout
+        const timeoutId = setTimeout(() => abortController.abort(), 60000); // 60 seconds timeout
 
         const analysisResponse = await openai.chat.completions.create({
           model: "gpt-4-turbo-preview",
           messages: [
             {
               role: "system",
-              content: "You are a document analyst. Provide a concise analysis in JSON format."
+              content: "You are a document analyst. Provide a comprehensive analysis in JSON format."
             },
             {
               role: "user",
-              content: "Based on these summaries, provide an analysis. Include key insights, potential issues, and recommendations in JSON format with keys: 'keyInsights', 'potentialIssues', and 'recommendations'.\n\n" + combinedSummary
+              content: "Based on these summaries, provide a detailed analysis. Include key insights, potential issues, and recommendations in JSON format with keys: 'keyInsights', 'potentialIssues', and 'recommendations'. Aim for at least 3-5 points in each category.\n\n" + combinedSummary
             }
           ],
           temperature: 0.3,
-          max_tokens: 500,
+          max_tokens: 1000, // Increased token limit for more detailed analysis
         }, { signal: abortController.signal });
 
         clearTimeout(timeoutId);
