@@ -42,18 +42,32 @@ export default function Home() {
       reader.onload = async (e) => {
         const text = e.target?.result as string;
         
-        const response = await axios.post('/api/analyze', {
-          content: text,
-        });
+        try {
+          const response = await axios.post('/api/analyze', {
+            content: text,
+          });
 
-        if (response.data.success) {
-          setSummary(response.data.summary);
-          setAnalysis(response.data.analysis);
-        } else {
-          setError('Failed to analyze document');
+          if (response.data.success) {
+            setSummary(response.data.summary);
+            setAnalysis(response.data.analysis);
+          } else {
+            setError(response.data.error || 'Failed to analyze document');
+          }
+        } catch (axiosError) {
+          if (axios.isAxiosError(axiosError) && axiosError.response?.data?.error) {
+            setError(axiosError.response.data.error);
+          } else {
+            setError('Failed to connect to the server. Please try again.');
+          }
         }
         setLoading(false);
       };
+
+      reader.onerror = () => {
+        setError('Failed to read the file. Please try again.');
+        setLoading(false);
+      };
+
       reader.readAsText(file);
     } catch (error) {
       setError('Error processing file: ' + (error instanceof Error ? error.message : 'Unknown error'));
