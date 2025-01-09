@@ -17,6 +17,138 @@ export default function Home() {
   const [error, setError] = useState('');
   const [status, setStatus] = useState('');
   const [progress, setProgress] = useState(0);
+  const [retryCount, setRetryCount] = useState(0);
+  const maxRetries = 3;
+
+  const resetState = () => {
+    setSummary('');
+    setAnalysis(null);
+    setError('');
+    setStatus('');
+    setProgress(0);
+    setRetryCount(0);
+  };
+
+  const processStream = async (response: Response) => {
+    const reader = response.body?.getReader();
+    if (!reader) {
+      throw new Error('No reader available');
+    }
+
+    let lastPingTime = Date.now();
+    const checkConnection = setInterval(() => {
+      if (Date.now() - lastPingTime > 15000) { // No ping for 15 seconds
+        clearInterval(checkConnection);
+        throw new Error('Connection lost');
+      }
+    }, 1000);
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = new TextDecoder().decode(value);
+        const lines = chunk.split('\n').filter(line => line.trim());
+
+        for (const line of lines) {
+          try {
+            const data = JSON.parse(line);
+            switch (data.type) {
+              case 'ping':
+                lastPingTime = Date.now();
+                break;
+              case 'status':
+                setStatus(data.message);
+                break;
+              case 'progress':
+                setStatus(data.message);
+                setProgress(data.progress);
+                break;
+              case 'complete':
+                setSummary(data.summary);
+                setAnalysis(data.analysis);
+                setStatus('Analysis complete!');
+                setProgress(100);
+                break;
+              case 'error':
+                setError(data.message);
+                setStatus('');
+                break;
+            }
+          } catch (e) {
+            console.error('Error parsing stream chunk:', e);
+          }
+        }
+      }
+    } finally {
+      clearInterval(checkConnection);
+    }
+  };
+
+  const handleReview = async () => {
+    if (!file) return;
+
+    setLoading(true);
+    resetState();
+    setStatus('Reading file...');
+    
+    try {
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        const text = e.target?.result as string;
+        setStatus('Initializing analysis...');
+        
+        const attemptAnalysis = async () => {
+          try {
+            const response = await fetch('/api/analyze', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({ content: text }),
+            });
+
+            if (!response.ok) {
+              throw new Error(`HTTP error! status: ${response.status}`);
+            }
+
+            await processStream(response);
+            setRetryCount(0); // Reset retry count on success
+          } catch (error) {
+            if (retryCount < maxRetries) {
+              setRetryCount(prev => prev + 1);
+              setStatus(`Connection lost. Retrying (${retryCount + 1}/${maxRetries})...`);
+              await new Promise(resolve => setTimeout(resolve, 2000));
+              await attemptAnalysis();
+            } else {
+              throw new Error('Failed to maintain connection after multiple attempts');
+            }
+          }
+        };
+
+        try {
+          await attemptAnalysis();
+        } catch (error) {
+          setError('Failed to analyze document: ' + (error instanceof Error ? error.message : 'Unknown error'));
+          setStatus('');
+        }
+        setLoading(false);
+      };
+
+      reader.onerror = () => {
+        setError('Failed to read the file. Please try again.');
+        setStatus('');
+        setLoading(false);
+      };
+
+      reader.readAsText(file);
+    } catch (error) {
+      setError('Error processing file: ' + (error instanceof Error ? error.message : 'Unknown error'));
+      setStatus('');
+      setLoading(false);
+    }
+  };
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop: (acceptedFiles) => {
@@ -39,95 +171,6 @@ export default function Home() {
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx']
     }
   });
-
-  const handleReview = async () => {
-    if (!file) return;
-
-    setLoading(true);
-    setError('');
-    setStatus('Reading file...');
-    setProgress(0);
-    
-    try {
-      const reader = new FileReader();
-      reader.onload = async (e) => {
-        const text = e.target?.result as string;
-        setStatus('Initializing analysis...');
-        
-        try {
-          const response = await fetch('/api/analyze', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ content: text }),
-          });
-
-          if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-          }
-
-          const reader = response.body?.getReader();
-          if (!reader) {
-            throw new Error('No reader available');
-          }
-
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-
-            // Convert the chunk to text and split by newlines
-            const chunk = new TextDecoder().decode(value);
-            const lines = chunk.split('\n').filter(line => line.trim());
-
-            // Process each line
-            for (const line of lines) {
-              try {
-                const data = JSON.parse(line);
-                switch (data.type) {
-                  case 'status':
-                    setStatus(data.message);
-                    break;
-                  case 'progress':
-                    setStatus(data.message);
-                    setProgress(data.progress);
-                    break;
-                  case 'complete':
-                    setSummary(data.summary);
-                    setAnalysis(data.analysis);
-                    setStatus('Analysis complete!');
-                    setProgress(100);
-                    break;
-                  case 'error':
-                    setError(data.message);
-                    setStatus('');
-                    break;
-                }
-              } catch (e) {
-                console.error('Error parsing stream chunk:', e);
-              }
-            }
-          }
-        } catch (error) {
-          setError('Failed to analyze document: ' + (error instanceof Error ? error.message : 'Unknown error'));
-          setStatus('');
-        }
-        setLoading(false);
-      };
-
-      reader.onerror = () => {
-        setError('Failed to read the file. Please try again.');
-        setStatus('');
-        setLoading(false);
-      };
-
-      reader.readAsText(file);
-    } catch (error) {
-      setError('Error processing file: ' + (error instanceof Error ? error.message : 'Unknown error'));
-      setStatus('');
-      setLoading(false);
-    }
-  };
 
   return (
     <div className="flex min-h-screen">
