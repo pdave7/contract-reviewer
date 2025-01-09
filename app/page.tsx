@@ -287,8 +287,7 @@ export default function Home() {
   };
 
   const handleAddFile = () => {
-    const newFileId = `file-${Date.now()}`;
-    setSelectedFileId(newFileId);
+    setSelectedFileId(null);
   };
 
   const handleDeleteFile = (fileId: string) => {
@@ -373,7 +372,7 @@ export default function Home() {
 
       {/* Main Content */}
       <div className="flex-1 p-8">
-        {selectedFileId ? (
+        {selectedFileId && files[selectedFileId] ? (
           <div className="max-w-3xl mx-auto">
             <h1 className="text-3xl font-bold mb-8">Contract Analysis</h1>
 
