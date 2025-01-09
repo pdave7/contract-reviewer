@@ -341,7 +341,7 @@ export default function Home() {
           <h2 className="text-xl font-bold">Contract Reviewer</h2>
           <button
             onClick={handleAddFile}
-            className="bg-blue-500 text-white p-2 rounded hover:bg-blue-600"
+            className="bg-blue-700 text-white p-2 rounded hover:bg-blue-800"
           >
             + Add
           </button>
@@ -351,7 +351,7 @@ export default function Home() {
             <div
               key={fileId}
               className={`p-3 mb-2 rounded cursor-pointer flex justify-between items-center ${
-                selectedFileId === fileId ? 'bg-blue-100' : 'hover:bg-gray-200'
+                selectedFileId === fileId ? 'bg-blue-300' : 'hover:bg-gray-200'
               }`}
               onClick={() => setSelectedFileId(fileId)}
             >
