@@ -23,6 +23,36 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
+// Validate if the document is a contract of sale
+async function validateContract(content: string): Promise<{ isValid: boolean; reason?: string }> {
+  try {
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4-turbo-preview',
+      messages: [
+        {
+          role: 'system',
+          content: 'You are a contract validation expert. Your task is to determine if the provided document is a contract of sale. Respond with a JSON object containing "isValid" (boolean) and "reason" (string explaining why it is or isn\'t a contract of sale).'
+        },
+        {
+          role: 'user',
+          content: `Please analyze this document and determine if it's a contract of sale: ${content.slice(0, 2000)}...`
+        }
+      ],
+      temperature: 0,
+      response_format: { type: "json_object" }
+    });
+
+    const result = JSON.parse(response.choices[0].message.content || '{}');
+    return {
+      isValid: result.isValid,
+      reason: result.reason
+    };
+  } catch (error) {
+    console.error('Error validating contract:', error);
+    throw new Error('Failed to validate document');
+  }
+}
+
 // Estimate tokens (rough approximation: 1 token ≈ 4 characters for English text)
 function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
@@ -30,19 +60,15 @@ function estimateTokens(text: string): number {
 
 // Function to split text into optimal chunks for GPT-4 Turbo
 function splitIntoChunks(text: string): string[] {
-  // Reduce chunk size to stay within TPM limits
-  // We'll aim for ~15K tokens per chunk to be safe
   const MAX_CHUNK_TOKENS = 15000;
   const MAX_CHUNK_CHARS = MAX_CHUNK_TOKENS * 4;
 
   const chunks: string[] = [];
   let currentChunk = '';
   
-  // Split by paragraphs first
   const paragraphs = text.split(/\n\s*\n/);
   
   for (const paragraph of paragraphs) {
-    // If a single paragraph is too large, split it by sentences
     if (estimateTokens(paragraph) > MAX_CHUNK_TOKENS) {
       const sentences = paragraph.match(/[^.!?]+[.!?]+/g) || [paragraph];
       
@@ -55,7 +81,6 @@ function splitIntoChunks(text: string): string[] {
         }
       }
     } else {
-      // Try to add the paragraph to current chunk
       if (estimateTokens(currentChunk + paragraph) > MAX_CHUNK_TOKENS && currentChunk.length > 0) {
         chunks.push(currentChunk.trim());
         currentChunk = paragraph;
@@ -80,12 +105,8 @@ async function delay(ms: number): Promise<void> {
 async function getSummaryForChunk(chunk: string, chunkIndex: number, totalChunks: number, retries = 3): Promise<string> {
   for (let attempt = 0; attempt < retries; attempt++) {
     try {
-      // Add delay between chunks to respect TPM
-      // If it's not the first chunk, wait to avoid hitting rate limits
       if (chunkIndex > 0) {
-        // Calculate delay based on TPM limit (30000 tokens per minute)
-        // We'll aim to stay well under the limit by processing ~20000 tokens per minute
-        const delayMs = 3000; // 3 seconds between chunks
+        const delayMs = 3000;
         await delay(delayMs);
       }
 
@@ -104,7 +125,7 @@ async function getSummaryForChunk(chunk: string, chunkIndex: number, totalChunks
             content: "Analyze this document section and provide a focused summary of the key points, focusing on important contract terms, obligations, risks, and notable clauses:\n\n" + chunk
           }
         ],
-        max_tokens: 800, // Reduced for better TPM management
+        max_tokens: 800,
         temperature: 0.3,
       }, { signal: abortController.signal });
 
@@ -113,12 +134,10 @@ async function getSummaryForChunk(chunk: string, chunkIndex: number, totalChunks
     } catch (error) {
       console.error(`Attempt ${attempt + 1} failed:`, error);
       if (error instanceof Error && error.message.includes('TPM')) {
-        // If we hit TPM limit, wait longer before retrying
-        await delay(10000); // Wait 10 seconds before retry on TPM error
+        await delay(10000);
       } else if (attempt === retries - 1) {
         throw error;
       }
-      // Regular exponential backoff for other errors
       await delay(Math.pow(2, attempt) * 1000);
     }
   }
@@ -126,14 +145,12 @@ async function getSummaryForChunk(chunk: string, chunkIndex: number, totalChunks
 }
 
 function cleanJsonString(str: string): string {
-  // Remove markdown formatting
   str = str.replace(/```json\n?/g, '').replace(/```\n?/g, '');
-  // Remove any leading/trailing whitespace
   str = str.trim();
   return str;
 }
 
-export const runtime = 'edge'; // Use edge runtime for better streaming support
+export const runtime = 'edge';
 
 export async function POST(req: Request) {
   const encoder = new TextEncoder();
@@ -149,11 +166,9 @@ export async function POST(req: Request) {
     }
   };
 
-  // Initialize pingInterval with a no-op interval
   let pingInterval: NodeJS.Timeout = setInterval(() => {}, 0);
   clearInterval(pingInterval);
 
-  // Keep-alive ping function with error handling
   const startPing = () => {
     pingInterval = setInterval(async () => {
       try {
@@ -162,7 +177,7 @@ export async function POST(req: Request) {
         console.error('Ping failed:', error);
         clearInterval(pingInterval);
       }
-    }, 5000); // Send ping every 5 seconds
+    }, 5000);
   };
 
   try {
@@ -177,9 +192,8 @@ export async function POST(req: Request) {
     }
 
     let textContent: string;
-
+    
     if (fileData.type === 'pdf') {
-      // For PDFs, we're now receiving the text content directly from the frontend
       textContent = fileData.content;
       
       if (!textContent.trim()) {
@@ -187,6 +201,24 @@ export async function POST(req: Request) {
       }
     } else {
       textContent = fileData.content;
+    }
+
+    // First, validate if it's a contract of sale
+    const validation = await validateContract(textContent);
+    
+    if (!validation.isValid) {
+      await writeChunk({ 
+        type: 'error',
+        message: `Invalid document: ${validation.reason}. Please upload a contract of sale.`
+      });
+      await writer.close();
+      return new NextResponse(stream.readable, {
+        headers: {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+        },
+      });
     }
 
     // Create response stream with appropriate headers
@@ -225,7 +257,7 @@ export async function POST(req: Request) {
                 type: 'status', 
                 message: `Rate limit reached. Waiting before retrying chunk ${i + 1}...`
               });
-              await delay(10000); // Wait 10 seconds before retry on TPM error
+              await delay(10000);
             } else {
               await writeChunk({ 
                 type: 'status', 
@@ -233,14 +265,13 @@ export async function POST(req: Request) {
               });
               await delay(1000);
             }
-            i--; // Retry this chunk
+            i--;
           }
         }
 
         const combinedSummary = summaries.join('\n\n');
         await writeChunk({ type: 'status', message: 'Generating final analysis...' });
 
-        // If the combined summary is too long, we need to summarize it further
         let finalSummary = combinedSummary;
         if (estimateTokens(combinedSummary) > 60000) {
           const summaryChunks = splitIntoChunks(combinedSummary);
@@ -252,7 +283,6 @@ export async function POST(req: Request) {
               message: `Condensing analysis part ${i + 1} of ${summaryChunks.length}...`
             });
             
-            // Add delay between condensing operations
             if (i > 0) {
               await delay(3000);
             }
@@ -278,7 +308,7 @@ export async function POST(req: Request) {
             } catch (error) {
               if (error instanceof Error && error.message.includes('TPM')) {
                 await delay(10000);
-                i--; // Retry this chunk
+                i--;
                 continue;
               }
               throw error;
@@ -304,8 +334,8 @@ export async function POST(req: Request) {
             }
           ],
           temperature: 0.3,
-          max_tokens: 2000, // Increased for more detailed analysis
-          response_format: { type: "json_object" }, // Force JSON response
+          max_tokens: 2000,
+          response_format: { type: "json_object" },
         }, { signal: abortController.signal });
 
         clearTimeout(timeoutId);
@@ -315,12 +345,10 @@ export async function POST(req: Request) {
           throw new Error('Failed to generate analysis');
         }
 
-        // Parse the JSON (no cleaning needed with response_format)
         let parsedAnalysis;
         try {
           parsedAnalysis = JSON.parse(analysisContent);
           
-          // Validate the expected structure
           if (!parsedAnalysis.keyInsights || !Array.isArray(parsedAnalysis.keyInsights) ||
               !parsedAnalysis.potentialIssues || !Array.isArray(parsedAnalysis.potentialIssues) ||
               !parsedAnalysis.recommendations || !Array.isArray(parsedAnalysis.recommendations)) {
