@@ -24,13 +24,10 @@ function estimateTokens(text: string): number {
 
 // Function to split text into optimal chunks for GPT-4 Turbo
 function splitIntoChunks(text: string): string[] {
-  // GPT-4 Turbo can handle 128K tokens total, but we need to leave room for:
-  // - System message (~50 tokens)
-  // - User message prefix (~50 tokens)
-  // - Response (~1000 tokens)
-  // So we'll aim for ~30K tokens per chunk to be safe
-  const MAX_CHUNK_TOKENS = 30000;
-  const MAX_CHUNK_CHARS = MAX_CHUNK_TOKENS * 4; // Approximate chars to tokens
+  // Reduce chunk size to stay within TPM limits
+  // We'll aim for ~15K tokens per chunk to be safe
+  const MAX_CHUNK_TOKENS = 15000;
+  const MAX_CHUNK_CHARS = MAX_CHUNK_TOKENS * 4;
 
   const chunks: string[] = [];
   let currentChunk = '';
@@ -69,9 +66,23 @@ function splitIntoChunks(text: string): string[] {
   return chunks;
 }
 
-async function getSummaryForChunk(chunk: string, retries = 3): Promise<string> {
+// Add delay between API calls to respect rate limits
+async function delay(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function getSummaryForChunk(chunk: string, chunkIndex: number, totalChunks: number, retries = 3): Promise<string> {
   for (let attempt = 0; attempt < retries; attempt++) {
     try {
+      // Add delay between chunks to respect TPM
+      // If it's not the first chunk, wait to avoid hitting rate limits
+      if (chunkIndex > 0) {
+        // Calculate delay based on TPM limit (30000 tokens per minute)
+        // We'll aim to stay well under the limit by processing ~20000 tokens per minute
+        const delayMs = 3000; // 3 seconds between chunks
+        await delay(delayMs);
+      }
+
       const abortController = new AbortController();
       const timeoutId = setTimeout(() => abortController.abort(), 60000);
 
@@ -80,14 +91,14 @@ async function getSummaryForChunk(chunk: string, retries = 3): Promise<string> {
         messages: [
           {
             role: "system",
-            content: "You are a document analyst specializing in contract review. Provide a comprehensive summary focusing on key terms, obligations, risks, and important clauses."
+            content: "You are a document analyst specializing in contract review. Provide a concise summary focusing on key terms, obligations, risks, and important clauses."
           },
           {
             role: "user",
-            content: "Analyze this document section and provide a detailed summary of the key points, focusing on important contract terms, obligations, risks, and notable clauses:\n\n" + chunk
+            content: "Analyze this document section and provide a focused summary of the key points, focusing on important contract terms, obligations, risks, and notable clauses:\n\n" + chunk
           }
         ],
-        max_tokens: 1000, // Increased for more comprehensive summaries
+        max_tokens: 800, // Reduced for better TPM management
         temperature: 0.3,
       }, { signal: abortController.signal });
 
@@ -95,8 +106,14 @@ async function getSummaryForChunk(chunk: string, retries = 3): Promise<string> {
       return response.choices[0].message.content || '';
     } catch (error) {
       console.error(`Attempt ${attempt + 1} failed:`, error);
-      if (attempt === retries - 1) throw error;
-      await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 1000));
+      if (error instanceof Error && error.message.includes('TPM')) {
+        // If we hit TPM limit, wait longer before retrying
+        await delay(10000); // Wait 10 seconds before retry on TPM error
+      } else if (attempt === retries - 1) {
+        throw error;
+      }
+      // Regular exponential backoff for other errors
+      await delay(Math.pow(2, attempt) * 1000);
     }
   }
   return '';
@@ -175,7 +192,7 @@ export async function POST(req: Request) {
         for (let i = 0; i < chunks.length; i++) {
           try {
             console.log(`Processing chunk ${i + 1} of ${chunks.length}`);
-            const summary = await getSummaryForChunk(chunks[i]);
+            const summary = await getSummaryForChunk(chunks[i], i, chunks.length);
             summaries.push(summary);
             await writeChunk({ 
               type: 'progress', 
@@ -184,12 +201,20 @@ export async function POST(req: Request) {
             });
           } catch (error) {
             console.error(`Error processing chunk ${i + 1}:`, error);
-            await writeChunk({ 
-              type: 'status', 
-              message: `Retrying chunk ${i + 1}...`
-            });
+            if (error instanceof Error && error.message.includes('TPM')) {
+              await writeChunk({ 
+                type: 'status', 
+                message: `Rate limit reached. Waiting before retrying chunk ${i + 1}...`
+              });
+              await delay(10000); // Wait 10 seconds before retry on TPM error
+            } else {
+              await writeChunk({ 
+                type: 'status', 
+                message: `Retrying chunk ${i + 1}...`
+              });
+              await delay(1000);
+            }
             i--; // Retry this chunk
-            await new Promise(resolve => setTimeout(resolve, 1000)); // Wait before retrying
           }
         }
 
@@ -198,7 +223,7 @@ export async function POST(req: Request) {
 
         // If the combined summary is too long, we need to summarize it further
         let finalSummary = combinedSummary;
-        if (estimateTokens(combinedSummary) > 60000) { // Leave room for system message and response
+        if (estimateTokens(combinedSummary) > 60000) {
           const summaryChunks = splitIntoChunks(combinedSummary);
           const secondarySummaries = [];
           
@@ -208,23 +233,37 @@ export async function POST(req: Request) {
               message: `Condensing analysis part ${i + 1} of ${summaryChunks.length}...`
             });
             
-            const response = await openai.chat.completions.create({
-              model: "gpt-4-turbo-preview",
-              messages: [
-                {
-                  role: "system",
-                  content: "You are a document analyst. Condense the following summary while preserving all key points."
-                },
-                {
-                  role: "user",
-                  content: "Condense this summary while preserving all important contract details:\n\n" + summaryChunks[i]
-                }
-              ],
-              temperature: 0.3,
-              max_tokens: 1000,
-            });
+            // Add delay between condensing operations
+            if (i > 0) {
+              await delay(3000);
+            }
             
-            secondarySummaries.push(response.choices[0].message.content || '');
+            try {
+              const response = await openai.chat.completions.create({
+                model: "gpt-4-turbo-preview",
+                messages: [
+                  {
+                    role: "system",
+                    content: "You are a document analyst. Condense the following summary while preserving all key points."
+                  },
+                  {
+                    role: "user",
+                    content: "Condense this summary while preserving all important contract details:\n\n" + summaryChunks[i]
+                  }
+                ],
+                temperature: 0.3,
+                max_tokens: 800,
+              });
+              
+              secondarySummaries.push(response.choices[0].message.content || '');
+            } catch (error) {
+              if (error instanceof Error && error.message.includes('TPM')) {
+                await delay(10000);
+                i--; // Retry this chunk
+                continue;
+              }
+              throw error;
+            }
           }
           
           finalSummary = secondarySummaries.join('\n\n');
