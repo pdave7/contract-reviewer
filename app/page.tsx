@@ -30,7 +30,8 @@ export default function Home() {
       if (typeof window !== 'undefined') {
         try {
           const pdfjs = await import('pdfjs-dist');
-          pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.js`;
+          // Use a specific version from cdnjs
+          pdfjs.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
           pdfjsLib = pdfjs;
         } catch (error) {
           console.error('Error loading PDF.js:', error);
