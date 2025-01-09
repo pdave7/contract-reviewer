@@ -17,18 +17,48 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-// Function to split text into smaller chunks
-function splitIntoChunks(text: string, maxChunkSize: number = 10000): string[] {
+// Estimate tokens (rough approximation: 1 token ≈ 4 characters for English text)
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
+// Function to split text into optimal chunks for GPT-4 Turbo
+function splitIntoChunks(text: string): string[] {
+  // GPT-4 Turbo can handle 128K tokens total, but we need to leave room for:
+  // - System message (~50 tokens)
+  // - User message prefix (~50 tokens)
+  // - Response (~1000 tokens)
+  // So we'll aim for ~30K tokens per chunk to be safe
+  const MAX_CHUNK_TOKENS = 30000;
+  const MAX_CHUNK_CHARS = MAX_CHUNK_TOKENS * 4; // Approximate chars to tokens
+
   const chunks: string[] = [];
   let currentChunk = '';
-  const sentences = text.match(/[^.!?]+[.!?]+/g) || [text];
-
-  for (const sentence of sentences) {
-    if ((currentChunk + sentence).length > maxChunkSize && currentChunk.length > 0) {
-      chunks.push(currentChunk.trim());
-      currentChunk = sentence;
+  
+  // Split by paragraphs first
+  const paragraphs = text.split(/\n\s*\n/);
+  
+  for (const paragraph of paragraphs) {
+    // If a single paragraph is too large, split it by sentences
+    if (estimateTokens(paragraph) > MAX_CHUNK_TOKENS) {
+      const sentences = paragraph.match(/[^.!?]+[.!?]+/g) || [paragraph];
+      
+      for (const sentence of sentences) {
+        if (estimateTokens(currentChunk + sentence) > MAX_CHUNK_TOKENS && currentChunk.length > 0) {
+          chunks.push(currentChunk.trim());
+          currentChunk = sentence;
+        } else {
+          currentChunk += sentence;
+        }
+      }
     } else {
-      currentChunk += sentence;
+      // Try to add the paragraph to current chunk
+      if (estimateTokens(currentChunk + paragraph) > MAX_CHUNK_TOKENS && currentChunk.length > 0) {
+        chunks.push(currentChunk.trim());
+        currentChunk = paragraph;
+      } else {
+        currentChunk += (currentChunk ? '\n\n' : '') + paragraph;
+      }
     }
   }
 
@@ -43,21 +73,21 @@ async function getSummaryForChunk(chunk: string, retries = 3): Promise<string> {
   for (let attempt = 0; attempt < retries; attempt++) {
     try {
       const abortController = new AbortController();
-      const timeoutId = setTimeout(() => abortController.abort(), 60000); // 60 seconds timeout for larger chunks
+      const timeoutId = setTimeout(() => abortController.abort(), 60000);
 
       const response = await openai.chat.completions.create({
         model: "gpt-4-turbo-preview",
         messages: [
           {
             role: "system",
-            content: "You are a document analyst specializing in contract review. Provide a brief, focused summary."
+            content: "You are a document analyst specializing in contract review. Provide a comprehensive summary focusing on key terms, obligations, risks, and important clauses."
           },
           {
             role: "user",
-            content: "Summarize the key points from this document chunk in 150 words:\n\n" + chunk
+            content: "Analyze this document section and provide a detailed summary of the key points, focusing on important contract terms, obligations, risks, and notable clauses:\n\n" + chunk
           }
         ],
-        max_tokens: 400, // Increased token limit for larger summaries
+        max_tokens: 1000, // Increased for more comprehensive summaries
         temperature: 0.3,
       }, { signal: abortController.signal });
 
@@ -66,7 +96,6 @@ async function getSummaryForChunk(chunk: string, retries = 3): Promise<string> {
     } catch (error) {
       console.error(`Attempt ${attempt + 1} failed:`, error);
       if (attempt === retries - 1) throw error;
-      // Wait before retrying (exponential backoff)
       await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 1000));
     }
   }
@@ -167,23 +196,58 @@ export async function POST(req: Request) {
         const combinedSummary = summaries.join('\n\n');
         await writeChunk({ type: 'status', message: 'Generating final analysis...' });
 
+        // If the combined summary is too long, we need to summarize it further
+        let finalSummary = combinedSummary;
+        if (estimateTokens(combinedSummary) > 60000) { // Leave room for system message and response
+          const summaryChunks = splitIntoChunks(combinedSummary);
+          const secondarySummaries = [];
+          
+          for (let i = 0; i < summaryChunks.length; i++) {
+            await writeChunk({ 
+              type: 'status', 
+              message: `Condensing analysis part ${i + 1} of ${summaryChunks.length}...`
+            });
+            
+            const response = await openai.chat.completions.create({
+              model: "gpt-4-turbo-preview",
+              messages: [
+                {
+                  role: "system",
+                  content: "You are a document analyst. Condense the following summary while preserving all key points."
+                },
+                {
+                  role: "user",
+                  content: "Condense this summary while preserving all important contract details:\n\n" + summaryChunks[i]
+                }
+              ],
+              temperature: 0.3,
+              max_tokens: 1000,
+            });
+            
+            secondarySummaries.push(response.choices[0].message.content || '');
+          }
+          
+          finalSummary = secondarySummaries.join('\n\n');
+        }
+
         const abortController = new AbortController();
-        const timeoutId = setTimeout(() => abortController.abort(), 60000); // 60 seconds timeout
+        const timeoutId = setTimeout(() => abortController.abort(), 60000);
 
         const analysisResponse = await openai.chat.completions.create({
           model: "gpt-4-turbo-preview",
           messages: [
             {
               role: "system",
-              content: "You are a document analyst. Provide a comprehensive analysis in JSON format. Return ONLY the JSON object without any markdown formatting or additional text."
+              content: "You are a contract analysis expert. Analyze the provided contract summary and return a JSON object with the following structure ONLY:\n{\n  \"keyInsights\": [\"insight1\", \"insight2\", ...],\n  \"potentialIssues\": [\"issue1\", \"issue2\", ...],\n  \"recommendations\": [\"rec1\", \"rec2\", ...]\n}\nProvide 3-5 detailed points in each category."
             },
             {
               role: "user",
-              content: "Based on these summaries, provide a detailed analysis. Include key insights, potential issues, and recommendations in JSON format with keys: 'keyInsights', 'potentialIssues', and 'recommendations'. Aim for at least 3-5 points in each category. Return ONLY the JSON object.\n\n" + combinedSummary
+              content: finalSummary
             }
           ],
           temperature: 0.3,
-          max_tokens: 1000,
+          max_tokens: 2000, // Increased for more detailed analysis
+          response_format: { type: "json_object" }, // Force JSON response
         }, { signal: abortController.signal });
 
         clearTimeout(timeoutId);
@@ -193,11 +257,10 @@ export async function POST(req: Request) {
           throw new Error('Failed to generate analysis');
         }
 
-        // Clean and parse the JSON
-        const cleanedJson = cleanJsonString(analysisContent);
+        // Parse the JSON (no cleaning needed with response_format)
         let parsedAnalysis;
         try {
-          parsedAnalysis = JSON.parse(cleanedJson);
+          parsedAnalysis = JSON.parse(analysisContent);
           
           // Validate the expected structure
           if (!parsedAnalysis.keyInsights || !Array.isArray(parsedAnalysis.keyInsights) ||
@@ -206,7 +269,7 @@ export async function POST(req: Request) {
             throw new Error('Invalid analysis format');
           }
         } catch (parseError) {
-          console.error('JSON parsing error:', parseError, 'Content:', cleanedJson);
+          console.error('JSON parsing error:', parseError, 'Content:', analysisContent);
           throw new Error('Failed to parse analysis response');
         }
 
