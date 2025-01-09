@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 import OpenAI from 'openai';
-import pdfParse from 'pdf-parse';
 
 interface StreamMessage {
   type: 'status' | 'progress' | 'complete' | 'error' | 'ping';
@@ -180,20 +179,11 @@ export async function POST(req: Request) {
     let textContent: string;
 
     if (fileData.type === 'pdf') {
-      try {
-        // Convert base64 to buffer
-        const pdfBuffer = Buffer.from(fileData.content, 'base64');
-        
-        // Parse PDF
-        const pdfData = await pdfParse(pdfBuffer);
-        textContent = pdfData.text;
-        
-        if (!textContent.trim()) {
-          throw new Error('PDF appears to be empty or unreadable');
-        }
-      } catch (error) {
-        console.error('PDF parsing error:', error);
-        throw new Error('Failed to parse PDF file. Please ensure the file is not corrupted or password protected.');
+      // For PDFs, we're now receiving the text content directly from the frontend
+      textContent = fileData.content;
+      
+      if (!textContent.trim()) {
+        throw new Error('PDF appears to be empty or unreadable');
       }
     } else {
       textContent = fileData.content;

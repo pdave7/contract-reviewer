@@ -1,13 +1,17 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useDropzone } from 'react-dropzone';
+import dynamic from 'next/dynamic';
 
 interface Analysis {
   keyInsights: string[];
   potentialIssues: string[];
   recommendations: string[];
 }
+
+// Dynamically import PDF.js only on the client side
+let pdfjsLib: typeof import('pdfjs-dist') | null = null;
 
 export default function Home() {
   const [file, setFile] = useState<File | null>(null);
@@ -19,6 +23,17 @@ export default function Home() {
   const [progress, setProgress] = useState(0);
   const [retryCount, setRetryCount] = useState(0);
   const maxRetries = 3;
+
+  // Initialize PDF.js on the client side
+  useEffect(() => {
+    const loadPdfjs = async () => {
+      if (typeof window !== 'undefined') {
+        pdfjsLib = await import('pdfjs-dist');
+        pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
+      }
+    };
+    loadPdfjs();
+  }, []);
 
   const resetState = () => {
     setSummary('');
@@ -128,6 +143,31 @@ export default function Home() {
     }
   };
 
+  const extractTextFromPDF = async (pdfData: ArrayBuffer): Promise<string> => {
+    if (!pdfjsLib) {
+      throw new Error('PDF.js is not initialized');
+    }
+
+    try {
+      const pdf = await pdfjsLib.getDocument({ data: pdfData }).promise;
+      let text = '';
+      
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const content = await page.getTextContent();
+        const pageText = content.items
+          .map((item: any) => item.str)
+          .join(' ');
+        text += pageText + '\n\n';
+      }
+      
+      return text;
+    } catch (error) {
+      console.error('Error extracting text from PDF:', error);
+      throw new Error('Failed to extract text from PDF. Please ensure the file is not corrupted or password protected.');
+    }
+  };
+
   const handleReview = async () => {
     if (!file) return;
 
@@ -142,35 +182,31 @@ export default function Home() {
         const fileContent = e.target?.result;
         
         if (file.type === 'application/pdf') {
-          // For PDFs, we'll send the binary data to the backend
           if (!(fileContent instanceof ArrayBuffer)) {
             throw new Error('Failed to read PDF file');
           }
           
-          // Convert ArrayBuffer to Base64
-          const base64 = btoa(
-            new Uint8Array(fileContent)
-              .reduce((data, byte) => data + String.fromCharCode(byte), '')
-          );
+          // Extract text from PDF in the browser
+          text = await extractTextFromPDF(fileContent);
           
-          text = JSON.stringify({ 
-            type: 'pdf',
-            content: base64,
-            name: file.name
-          });
+          if (!text.trim()) {
+            throw new Error('No text could be extracted from the PDF');
+          }
         } else {
-          // For text files, send the content directly
-          text = JSON.stringify({
-            type: 'text',
-            content: e.target?.result as string,
-            name: file.name
-          });
+          if (typeof fileContent !== 'string') {
+            throw new Error('Failed to read text file');
+          }
+          text = fileContent;
         }
 
         setStatus('Initializing analysis...');
         
         try {
-          await attemptAnalysis(text);
+          await attemptAnalysis(JSON.stringify({
+            type: file.type === 'application/pdf' ? 'pdf' : 'text',
+            content: text,
+            name: file.name
+          }));
         } catch (error) {
           setError('Failed to analyze document: ' + (error instanceof Error ? error.message : 'Unknown error'));
           setStatus('');

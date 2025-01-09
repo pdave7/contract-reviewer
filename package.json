@@ -9,10 +9,12 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@types/pdfjs-dist": "^2.10.377",
     "axios": "^1.7.9",
     "next": "15.1.4",
     "openai": "^4.77.4",
     "pdf-parse": "^1.1.1",
+    "pdfjs-dist": "^4.8.69",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-dropzone": "^14.3.5"
