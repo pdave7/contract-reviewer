@@ -336,7 +336,7 @@ export default function Home() {
   return (
     <div className="flex min-h-screen">
       {/* Sidebar */}
-      <div className="w-64 bg-gray-100 p-6 flex flex-col">
+      <div className="w-64 bg-blue-100 p-6 flex flex-col">
         <div className="flex justify-between items-center mb-6">
           <h2 className="text-xl font-bold">Contract Reviewer</h2>
           <button
