@@ -77,8 +77,11 @@ export async function POST(req: Request) {
     await writer.write(encoder.encode(JSON.stringify(data) + '\n'));
   };
 
+  // Initialize pingInterval with a no-op interval
+  let pingInterval: NodeJS.Timeout = setInterval(() => {}, 0);
+  clearInterval(pingInterval);
+
   // Keep-alive ping function
-  let pingInterval: NodeJS.Timeout;
   const startPing = () => {
     pingInterval = setInterval(async () => {
       try {
