@@ -16,6 +16,7 @@ export default function Home() {
   const [summary, setSummary] = useState('');
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
   const [error, setError] = useState('');
+  const [status, setStatus] = useState('');
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop: (acceptedFiles) => {
@@ -26,9 +27,16 @@ export default function Home() {
       }
       setFile(selectedFile);
       setError('');
+      setStatus('');
     },
     maxFiles: 1,
     multiple: false,
+    accept: {
+      'text/*': ['.txt', '.md', '.doc', '.docx', '.pdf'],
+      'application/pdf': ['.pdf'],
+      'application/msword': ['.doc'],
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx']
+    }
   });
 
   const handleReview = async () => {
@@ -36,11 +44,13 @@ export default function Home() {
 
     setLoading(true);
     setError('');
+    setStatus('Reading file...');
     
     try {
       const reader = new FileReader();
       reader.onload = async (e) => {
         const text = e.target?.result as string;
+        setStatus('Analyzing document...');
         
         try {
           const response = await axios.post('/api/analyze', {
@@ -50,8 +60,10 @@ export default function Home() {
           if (response.data.success) {
             setSummary(response.data.summary);
             setAnalysis(response.data.analysis);
+            setStatus('Analysis complete!');
           } else {
             setError(response.data.error || 'Failed to analyze document');
+            setStatus('');
           }
         } catch (axiosError) {
           if (axios.isAxiosError(axiosError) && axiosError.response?.data?.error) {
@@ -59,18 +71,21 @@ export default function Home() {
           } else {
             setError('Failed to connect to the server. Please try again.');
           }
+          setStatus('');
         }
         setLoading(false);
       };
 
       reader.onerror = () => {
         setError('Failed to read the file. Please try again.');
+        setStatus('');
         setLoading(false);
       };
 
       reader.readAsText(file);
     } catch (error) {
       setError('Error processing file: ' + (error instanceof Error ? error.message : 'Unknown error'));
+      setStatus('');
       setLoading(false);
     }
   };
@@ -100,7 +115,12 @@ export default function Home() {
             {isDragActive ? (
               <p>Drop the file here...</p>
             ) : (
-              <p>Drag and drop a file here, or click to select a file</p>
+              <div>
+                <p>Drag and drop a file here, or click to select a file</p>
+                <p className="text-sm text-gray-500 mt-2">
+                  Supported formats: .txt, .doc, .docx, .pdf
+                </p>
+              </div>
             )}
           </div>
 
@@ -116,6 +136,9 @@ export default function Home() {
               >
                 {loading ? 'Analyzing...' : 'Request Review'}
               </button>
+              {status && (
+                <p className="mt-2 text-sm text-blue-600">{status}</p>
+              )}
             </div>
           )}
 
