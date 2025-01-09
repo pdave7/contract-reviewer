@@ -10,17 +10,23 @@ interface Analysis {
   recommendations: string[];
 }
 
+interface FileData {
+  id: string;
+  file: File;
+  summary: string;
+  analysis: Analysis | null;
+  error: string;
+  status: string;
+  progress: number;
+  loading: boolean;
+}
+
 // Dynamically import PDF.js only on the client side
 let pdfjsLib: typeof import('pdfjs-dist') | null = null;
 
 export default function Home() {
-  const [file, setFile] = useState<File | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [summary, setSummary] = useState('');
-  const [analysis, setAnalysis] = useState<Analysis | null>(null);
-  const [error, setError] = useState('');
-  const [status, setStatus] = useState('');
-  const [progress, setProgress] = useState(0);
+  const [files, setFiles] = useState<{ [key: string]: FileData }>({});
+  const [selectedFileId, setSelectedFileId] = useState<string | null>(null);
   const [retryCount, setRetryCount] = useState(0);
   const maxRetries = 3;
 
@@ -30,7 +36,6 @@ export default function Home() {
       if (typeof window !== 'undefined') {
         try {
           const pdfjs = await import('pdfjs-dist');
-          // Use a specific version from cdnjs
           pdfjs.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
           pdfjsLib = pdfjs;
         } catch (error) {
@@ -41,16 +46,21 @@ export default function Home() {
     loadPdfjs();
   }, []);
 
-  const resetState = () => {
-    setSummary('');
-    setAnalysis(null);
-    setError('');
-    setStatus('');
-    setProgress(0);
-    setRetryCount(0);
+  const resetFileState = (fileId: string) => {
+    setFiles(prev => ({
+      ...prev,
+      [fileId]: {
+        ...prev[fileId],
+        summary: '',
+        analysis: null,
+        error: '',
+        status: '',
+        progress: 0,
+      }
+    }));
   };
 
-  const processStream = async (response: Response) => {
+  const processStream = async (response: Response, fileId: string) => {
     const reader = response.body?.getReader();
     if (!reader) {
       throw new Error('No reader available');
@@ -58,24 +68,21 @@ export default function Home() {
 
     let lastPingTime = Date.now();
     const checkConnection = setInterval(() => {
-      if (Date.now() - lastPingTime > 15000) { // No ping for 15 seconds
+      if (Date.now() - lastPingTime > 15000) {
         clearInterval(checkConnection);
         throw new Error('Connection lost - no ping received');
       }
     }, 1000);
 
-    let buffer = ''; // Buffer for incomplete chunks
+    let buffer = '';
 
     try {
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
-        // Append new data to buffer and process complete lines
         buffer += new TextDecoder().decode(value);
         const lines = buffer.split('\n');
-        
-        // Keep the last incomplete line in the buffer
         buffer = lines.pop() || '';
 
         for (const line of lines) {
@@ -83,25 +90,29 @@ export default function Home() {
           
           try {
             const data = JSON.parse(line);
-            switch (data.type) {
-              case 'ping':
-                lastPingTime = Date.now();
-                break;
-              case 'status':
-                setStatus(data.message);
-                break;
-              case 'progress':
-                setStatus(data.message);
-                setProgress(data.progress);
-                break;
-              case 'complete':
-                setSummary(data.summary);
-                setAnalysis(data.analysis);
-                setStatus('Analysis complete!');
-                setProgress(100);
-                break;
-              case 'error':
-                throw new Error(data.message);
+            setFiles(prev => ({
+              ...prev,
+              [fileId]: {
+                ...prev[fileId],
+                ...(data.type === 'ping' ? {} : {
+                  status: data.message || prev[fileId].status,
+                  progress: data.progress || prev[fileId].progress,
+                  ...(data.type === 'complete' ? {
+                    summary: data.summary,
+                    analysis: data.analysis,
+                    status: 'Analysis complete!',
+                    progress: 100,
+                  } : {}),
+                  ...(data.type === 'error' ? {
+                    error: data.message,
+                    status: '',
+                  } : {})
+                })
+              }
+            }));
+
+            if (data.type === 'ping') {
+              lastPingTime = Date.now();
             }
           } catch (e) {
             console.error('Error processing line:', line, e);
@@ -117,7 +128,7 @@ export default function Home() {
     }
   };
 
-  const attemptAnalysis = async (text: string, attempt: number = 1): Promise<void> => {
+  const attemptAnalysis = async (text: string, fileId: string, attempt: number = 1): Promise<void> => {
     const maxAttempts = 3;
     const backoffDelay = Math.min(1000 * Math.pow(2, attempt - 1), 8000);
 
@@ -134,15 +145,21 @@ export default function Home() {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
 
-      await processStream(response);
-      setRetryCount(0); // Reset retry count on success
+      await processStream(response, fileId);
+      setRetryCount(0);
     } catch (error) {
       console.error(`Attempt ${attempt} failed:`, error);
       
       if (attempt < maxAttempts) {
-        setStatus(`Connection issue. Retrying in ${backoffDelay/1000} seconds... (${attempt}/${maxAttempts})`);
+        setFiles(prev => ({
+          ...prev,
+          [fileId]: {
+            ...prev[fileId],
+            status: `Connection issue. Retrying in ${backoffDelay/1000} seconds... (${attempt}/${maxAttempts})`
+          }
+        }));
         await new Promise(resolve => setTimeout(resolve, backoffDelay));
-        return attemptAnalysis(text, attempt + 1);
+        return attemptAnalysis(text, fileId, attempt + 1);
       }
       
       throw error;
@@ -174,25 +191,32 @@ export default function Home() {
     }
   };
 
-  const handleReview = async () => {
-    if (!file) return;
+  const handleReview = async (fileId: string) => {
+    const fileData = files[fileId];
+    if (!fileData) return;
 
-    setLoading(true);
-    resetState();
-    setStatus('Reading file...');
-    
+    setFiles(prev => ({
+      ...prev,
+      [fileId]: {
+        ...prev[fileId],
+        loading: true,
+        error: '',
+        status: 'Reading file...',
+        progress: 0,
+      }
+    }));
+
     try {
       const reader = new FileReader();
       reader.onload = async (e) => {
         let text: string;
         const fileContent = e.target?.result;
         
-        if (file.type === 'application/pdf') {
+        if (fileData.file.type === 'application/pdf') {
           if (!(fileContent instanceof ArrayBuffer)) {
             throw new Error('Failed to read PDF file');
           }
           
-          // Extract text from PDF in the browser
           text = await extractTextFromPDF(fileContent);
           
           if (!text.trim()) {
@@ -205,52 +229,100 @@ export default function Home() {
           text = fileContent;
         }
 
-        setStatus('Initializing analysis...');
+        setFiles(prev => ({
+          ...prev,
+          [fileId]: {
+            ...prev[fileId],
+            status: 'Initializing analysis...',
+          }
+        }));
         
         try {
           await attemptAnalysis(JSON.stringify({
-            type: file.type === 'application/pdf' ? 'pdf' : 'text',
+            type: fileData.file.type === 'application/pdf' ? 'pdf' : 'text',
             content: text,
-            name: file.name
-          }));
+            name: fileData.file.name
+          }), fileId);
         } catch (error) {
-          setError('Failed to analyze document: ' + (error instanceof Error ? error.message : 'Unknown error'));
-          setStatus('');
-        } finally {
-          setLoading(false);
+          setFiles(prev => ({
+            ...prev,
+            [fileId]: {
+              ...prev[fileId],
+              error: 'Failed to analyze document: ' + (error instanceof Error ? error.message : 'Unknown error'),
+              status: '',
+              loading: false,
+            }
+          }));
         }
       };
 
       reader.onerror = () => {
-        setError('Failed to read the file. Please try again.');
-        setStatus('');
-        setLoading(false);
+        setFiles(prev => ({
+          ...prev,
+          [fileId]: {
+            ...prev[fileId],
+            error: 'Failed to read the file. Please try again.',
+            status: '',
+            loading: false,
+          }
+        }));
       };
 
-      // Read as ArrayBuffer for PDFs, text for other files
-      if (file.type === 'application/pdf') {
-        reader.readAsArrayBuffer(file);
+      if (fileData.file.type === 'application/pdf') {
+        reader.readAsArrayBuffer(fileData.file);
       } else {
-        reader.readAsText(file);
+        reader.readAsText(fileData.file);
       }
     } catch (error) {
-      setError('Error processing file: ' + (error instanceof Error ? error.message : 'Unknown error'));
-      setStatus('');
-      setLoading(false);
+      setFiles(prev => ({
+        ...prev,
+        [fileId]: {
+          ...prev[fileId],
+          error: 'Error processing file: ' + (error instanceof Error ? error.message : 'Unknown error'),
+          status: '',
+          loading: false,
+        }
+      }));
+    }
+  };
+
+  const handleAddFile = () => {
+    const newFileId = `file-${Date.now()}`;
+    setSelectedFileId(newFileId);
+  };
+
+  const handleDeleteFile = (fileId: string) => {
+    setFiles(prev => {
+      const newFiles = { ...prev };
+      delete newFiles[fileId];
+      return newFiles;
+    });
+    if (selectedFileId === fileId) {
+      setSelectedFileId(Object.keys(files)[0] || null);
     }
   };
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop: (acceptedFiles) => {
-      const selectedFile = acceptedFiles[0];
-      if (selectedFile.size > 100 * 1024 * 1024) { // 100MB
-        setError('File size must be less than 100MB');
+      const file = acceptedFiles[0];
+      if (file.size > 100 * 1024 * 1024) {
         return;
       }
-      setFile(selectedFile);
-      setError('');
-      setStatus('');
-      setProgress(0);
+      const newFileId = `file-${Date.now()}`;
+      setFiles(prev => ({
+        ...prev,
+        [newFileId]: {
+          id: newFileId,
+          file,
+          summary: '',
+          analysis: null,
+          error: '',
+          status: '',
+          progress: 0,
+          loading: false,
+        }
+      }));
+      setSelectedFileId(newFileId);
     },
     maxFiles: 1,
     multiple: false,
@@ -265,22 +337,128 @@ export default function Home() {
   return (
     <div className="flex min-h-screen">
       {/* Sidebar */}
-      <div className="w-64 bg-gray-100 p-6">
-        <h2 className="text-xl font-bold mb-4">Contract Reviewer</h2>
-        <p className="text-sm text-gray-600">
-          Drop your contract file to get an AI-powered analysis
-        </p>
+      <div className="w-64 bg-gray-100 p-6 flex flex-col">
+        <div className="flex justify-between items-center mb-6">
+          <h2 className="text-xl font-bold">Contract Reviewer</h2>
+          <button
+            onClick={handleAddFile}
+            className="bg-blue-500 text-white p-2 rounded hover:bg-blue-600"
+          >
+            + Add
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto">
+          {Object.entries(files).map(([fileId, fileData]) => (
+            <div
+              key={fileId}
+              className={`p-3 mb-2 rounded cursor-pointer flex justify-between items-center ${
+                selectedFileId === fileId ? 'bg-blue-100' : 'hover:bg-gray-200'
+              }`}
+              onClick={() => setSelectedFileId(fileId)}
+            >
+              <span className="truncate flex-1">{fileData.file.name}</span>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleDeleteFile(fileId);
+                }}
+                className="ml-2 text-red-500 hover:text-red-700"
+              >
+                ×
+              </button>
+            </div>
+          ))}
+        </div>
       </div>
 
       {/* Main Content */}
       <div className="flex-1 p-8">
-        <div className="max-w-3xl mx-auto">
-          <h1 className="text-3xl font-bold mb-8">Contract Analysis</h1>
+        {selectedFileId ? (
+          <div className="max-w-3xl mx-auto">
+            <h1 className="text-3xl font-bold mb-8">Contract Analysis</h1>
 
-          {/* Dropzone */}
+            {/* File Info */}
+            <div className="mb-6">
+              <h3 className="text-lg font-semibold mb-2">Selected File:</h3>
+              <p className="text-gray-600">{files[selectedFileId].file.name}</p>
+              <button
+                onClick={() => handleReview(selectedFileId)}
+                disabled={files[selectedFileId].loading}
+                className="mt-4 bg-blue-500 text-white px-6 py-2 rounded hover:bg-blue-600 disabled:bg-gray-400"
+              >
+                {files[selectedFileId].loading ? 'Analyzing...' : 'Request Review'}
+              </button>
+              {files[selectedFileId].status && (
+                <div className="mt-4">
+                  <p className="text-sm text-blue-600">{files[selectedFileId].status}</p>
+                  {files[selectedFileId].progress > 0 && (
+                    <div className="w-full bg-gray-200 rounded-full h-2.5 mt-2">
+                      <div
+                        className="bg-blue-600 h-2.5 rounded-full transition-all duration-300"
+                        style={{ width: `${files[selectedFileId].progress}%` }}
+                      ></div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Error Message */}
+            {files[selectedFileId].error && (
+              <div className="text-red-500 mb-6">
+                {files[selectedFileId].error}
+              </div>
+            )}
+
+            {/* Results */}
+            {files[selectedFileId].summary && (
+              <div className="space-y-6">
+                <div>
+                  <h3 className="text-xl font-semibold mb-2">Summary</h3>
+                  <p className="text-gray-700 whitespace-pre-wrap">{files[selectedFileId].summary}</p>
+                </div>
+
+                {files[selectedFileId].analysis && (
+                  <div>
+                    <h3 className="text-xl font-semibold mb-2">Analysis</h3>
+                    
+                    <div className="space-y-4">
+                      <div>
+                        <h4 className="font-semibold text-lg">Key Insights</h4>
+                        <ul className="list-disc pl-5">
+                          {files[selectedFileId].analysis.keyInsights.map((insight: string, i: number) => (
+                            <li key={i}>{insight}</li>
+                          ))}
+                        </ul>
+                      </div>
+
+                      <div>
+                        <h4 className="font-semibold text-lg">Potential Issues</h4>
+                        <ul className="list-disc pl-5">
+                          {files[selectedFileId].analysis.potentialIssues.map((issue: string, i: number) => (
+                            <li key={i}>{issue}</li>
+                          ))}
+                        </ul>
+                      </div>
+
+                      <div>
+                        <h4 className="font-semibold text-lg">Recommendations</h4>
+                        <ul className="list-disc pl-5">
+                          {files[selectedFileId].analysis.recommendations.map((rec: string, i: number) => (
+                            <li key={i}>{rec}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        ) : (
           <div
             {...getRootProps()}
-            className={`border-2 border-dashed rounded-lg p-8 mb-6 text-center cursor-pointer
+            className={`border-2 border-dashed rounded-lg p-8 mb-6 text-center cursor-pointer max-w-3xl mx-auto
               ${isDragActive ? 'border-blue-500 bg-blue-50' : 'border-gray-300'}`}
           >
             <input {...getInputProps()} />
@@ -295,87 +473,7 @@ export default function Home() {
               </div>
             )}
           </div>
-
-          {/* File Info */}
-          {file && (
-            <div className="mb-6">
-              <h3 className="text-lg font-semibold mb-2">Selected File:</h3>
-              <p className="text-gray-600">{file.name}</p>
-              <button
-                onClick={handleReview}
-                disabled={loading}
-                className="mt-4 bg-blue-500 text-white px-6 py-2 rounded hover:bg-blue-600 disabled:bg-gray-400"
-              >
-                {loading ? 'Analyzing...' : 'Request Review'}
-              </button>
-              {status && (
-                <div className="mt-4">
-                  <p className="text-sm text-blue-600">{status}</p>
-                  {progress > 0 && (
-                    <div className="w-full bg-gray-200 rounded-full h-2.5 mt-2">
-                      <div
-                        className="bg-blue-600 h-2.5 rounded-full transition-all duration-300"
-                        style={{ width: `${progress}%` }}
-                      ></div>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Error Message */}
-          {error && (
-            <div className="text-red-500 mb-6">
-              {error}
-            </div>
-          )}
-
-          {/* Results */}
-          {summary && (
-            <div className="space-y-6">
-              <div>
-                <h3 className="text-xl font-semibold mb-2">Summary</h3>
-                <p className="text-gray-700 whitespace-pre-wrap">{summary}</p>
-              </div>
-
-              {analysis && (
-                <div>
-                  <h3 className="text-xl font-semibold mb-2">Analysis</h3>
-                  
-                  <div className="space-y-4">
-                    <div>
-                      <h4 className="font-semibold text-lg">Key Insights</h4>
-                      <ul className="list-disc pl-5">
-                        {analysis.keyInsights.map((insight: string, i: number) => (
-                          <li key={i}>{insight}</li>
-                        ))}
-                      </ul>
-                    </div>
-
-                    <div>
-                      <h4 className="font-semibold text-lg">Potential Issues</h4>
-                      <ul className="list-disc pl-5">
-                        {analysis.potentialIssues.map((issue: string, i: number) => (
-                          <li key={i}>{issue}</li>
-                        ))}
-                      </ul>
-                    </div>
-
-                    <div>
-                      <h4 className="font-semibold text-lg">Recommendations</h4>
-                      <ul className="list-disc pl-5">
-                        {analysis.recommendations.map((rec: string, i: number) => (
-                          <li key={i}>{rec}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
+        )}
       </div>
     </div>
   );
