@@ -25,6 +25,9 @@ export async function POST(req: Request) {
     });
 
     const summary = summaryResponse.choices[0].message.content;
+    if (!summary) {
+      throw new Error('Failed to generate summary');
+    }
 
     // Second analysis: Get detailed analysis in JSON format
     const analysisResponse = await openai.chat.completions.create({
@@ -41,12 +44,15 @@ export async function POST(req: Request) {
       ],
     });
 
-    const analysis = analysisResponse.choices[0].message.content;
+    const analysisContent = analysisResponse.choices[0].message.content;
+    if (!analysisContent) {
+      throw new Error('Failed to generate analysis');
+    }
 
     return NextResponse.json({ 
       success: true, 
       summary,
-      analysis: JSON.parse(analysis)
+      analysis: JSON.parse(analysisContent)
     });
 
   } catch (error) {
