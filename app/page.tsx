@@ -17,6 +17,7 @@ export default function Home() {
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
   const [error, setError] = useState('');
   const [status, setStatus] = useState('');
+  const [progress, setProgress] = useState(0);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop: (acceptedFiles) => {
@@ -28,6 +29,7 @@ export default function Home() {
       setFile(selectedFile);
       setError('');
       setStatus('');
+      setProgress(0);
     },
     maxFiles: 1,
     multiple: false,
@@ -45,32 +47,70 @@ export default function Home() {
     setLoading(true);
     setError('');
     setStatus('Reading file...');
+    setProgress(0);
     
     try {
       const reader = new FileReader();
       reader.onload = async (e) => {
         const text = e.target?.result as string;
-        setStatus('Analyzing document...');
+        setStatus('Initializing analysis...');
         
         try {
-          const response = await axios.post('/api/analyze', {
-            content: text,
+          const response = await fetch('/api/analyze', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ content: text }),
           });
 
-          if (response.data.success) {
-            setSummary(response.data.summary);
-            setAnalysis(response.data.analysis);
-            setStatus('Analysis complete!');
-          } else {
-            setError(response.data.error || 'Failed to analyze document');
-            setStatus('');
+          if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
           }
-        } catch (axiosError) {
-          if (axios.isAxiosError(axiosError) && axiosError.response?.data?.error) {
-            setError(axiosError.response.data.error);
-          } else {
-            setError('Failed to connect to the server. Please try again.');
+
+          const reader = response.body?.getReader();
+          if (!reader) {
+            throw new Error('No reader available');
           }
+
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            // Convert the chunk to text and split by newlines
+            const chunk = new TextDecoder().decode(value);
+            const lines = chunk.split('\n').filter(line => line.trim());
+
+            // Process each line
+            for (const line of lines) {
+              try {
+                const data = JSON.parse(line);
+                switch (data.type) {
+                  case 'status':
+                    setStatus(data.message);
+                    break;
+                  case 'progress':
+                    setStatus(data.message);
+                    setProgress(data.progress);
+                    break;
+                  case 'complete':
+                    setSummary(data.summary);
+                    setAnalysis(data.analysis);
+                    setStatus('Analysis complete!');
+                    setProgress(100);
+                    break;
+                  case 'error':
+                    setError(data.message);
+                    setStatus('');
+                    break;
+                }
+              } catch (e) {
+                console.error('Error parsing stream chunk:', e);
+              }
+            }
+          }
+        } catch (error) {
+          setError('Failed to analyze document: ' + (error instanceof Error ? error.message : 'Unknown error'));
           setStatus('');
         }
         setLoading(false);
@@ -137,7 +177,17 @@ export default function Home() {
                 {loading ? 'Analyzing...' : 'Request Review'}
               </button>
               {status && (
-                <p className="mt-2 text-sm text-blue-600">{status}</p>
+                <div className="mt-4">
+                  <p className="text-sm text-blue-600">{status}</p>
+                  {progress > 0 && (
+                    <div className="w-full bg-gray-200 rounded-full h-2.5 mt-2">
+                      <div
+                        className="bg-blue-600 h-2.5 rounded-full transition-all duration-300"
+                        style={{ width: `${progress}%` }}
+                      ></div>
+                    </div>
+                  )}
+                </div>
               )}
             </div>
           )}
