@@ -4,11 +4,17 @@ import { useState } from 'react';
 import { useDropzone } from 'react-dropzone';
 import axios from 'axios';
 
+interface Analysis {
+  keyInsights: string[];
+  potentialIssues: string[];
+  recommendations: string[];
+}
+
 export default function Home() {
   const [file, setFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
   const [summary, setSummary] = useState('');
-  const [analysis, setAnalysis] = useState<any>(null);
+  const [analysis, setAnalysis] = useState<Analysis | null>(null);
   const [error, setError] = useState('');
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
@@ -49,8 +55,8 @@ export default function Home() {
         setLoading(false);
       };
       reader.readAsText(file);
-    } catch (err) {
-      setError('Error processing file');
+    } catch (error) {
+      setError('Error processing file: ' + (error instanceof Error ? error.message : 'Unknown error'));
       setLoading(false);
     }
   };
