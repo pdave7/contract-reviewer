@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useDropzone } from 'react-dropzone';
 import dynamic from 'next/dynamic';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -34,6 +34,7 @@ export default function Home() {
   const [selectedFileId, setSelectedFileId] = useState<string | null>(null);
   const [retryCount, setRetryCount] = useState(0);
   const maxRetries = 3;
+  const [showProgress, setShowProgress] = useState(true);
 
   // Initialize PDF.js on the client side
   useEffect(() => {
@@ -107,14 +108,22 @@ export default function Home() {
                     analysis: data.analysis,
                     status: 'Analysis complete!',
                     progress: 100,
+                    loading: false
                   } : {}),
                   ...(data.type === 'error' ? {
                     error: data.message,
                     status: '',
+                    loading: false
                   } : {})
                 })
               }
             }));
+
+            if (data.type === 'complete') {
+              setTimeout(() => {
+                setShowProgress(false);
+              }, 3000);
+            }
 
             if (data.type === 'ping') {
               lastPingTime = Date.now();
@@ -199,6 +208,8 @@ export default function Home() {
   const handleReview = async (fileId: string) => {
     const fileData = files[fileId];
     if (!fileData) return;
+
+    setShowProgress(true);
 
     setFiles(prev => ({
       ...prev,
@@ -428,7 +439,11 @@ export default function Home() {
                       disabled={files[selectedFileId].loading}
                       className="w-full sm:w-auto"
                     >
-                      {files[selectedFileId].loading ? 'Analyzing...' : 'Request Review'}
+                      {files[selectedFileId].loading 
+                        ? 'Analyzing...' 
+                        : files[selectedFileId].analysis 
+                          ? 'Analyze again'
+                          : 'Request Review'}
                     </Button>
                     {files[selectedFileId].status && (
                       <motion.div
@@ -437,7 +452,7 @@ export default function Home() {
                         className="space-y-2"
                       >
                         <p className="text-sm text-primary">{files[selectedFileId].status}</p>
-                        {files[selectedFileId].progress > 0 && (
+                        {files[selectedFileId].progress > 0 && showProgress && (
                           <Progress value={files[selectedFileId].progress} className="h-2" />
                         )}
                       </motion.div>
