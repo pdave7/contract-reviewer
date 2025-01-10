@@ -462,16 +462,12 @@ export default function Home() {
                     animate={{ opacity: 1, y: 0 }}
                     className="space-y-12"
                   >
-                    <div className="bg-card rounded-xl p-8 shadow-sm border">
-                      <h3 className="text-2xl font-semibold mb-6">Summary</h3>
-                      <p className="text-card-foreground whitespace-pre-wrap leading-relaxed">{files[selectedFileId].summary}</p>
-                    </div>
-
                     {files[selectedFileId].analysis && (
                       <div className="space-y-8">
                         <h3 className="text-2xl font-semibold">Analysis</h3>
                         
-                        <div className="grid gap-8 md:grid-cols-2 lg:grid-cols-3">
+                        <div className="space-y-6">
+                          {/* Key Insights Card */}
                           <motion.div
                             initial={{ opacity: 0, y: 20 }}
                             animate={{ opacity: 1, y: 0 }}
@@ -492,6 +488,7 @@ export default function Home() {
                             </ul>
                           </motion.div>
 
+                          {/* Potential Issues Card */}
                           <motion.div
                             initial={{ opacity: 0, y: 20 }}
                             animate={{ opacity: 1, y: 0 }}
@@ -513,6 +510,7 @@ export default function Home() {
                             </ul>
                           </motion.div>
 
+                          {/* Recommendations Card */}
                           <motion.div
                             initial={{ opacity: 0, y: 20 }}
                             animate={{ opacity: 1, y: 0 }}
