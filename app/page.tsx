@@ -7,7 +7,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
-import { FileText, Upload, X, Plus, AlertCircle } from 'lucide-react';
+import { FileText, Upload, X, Plus, AlertCircle, Lightbulb, AlertTriangle, CheckCircle2 } from 'lucide-react';
 
 interface Analysis {
   keyInsights: string[];
@@ -413,10 +413,11 @@ export default function Home() {
                 exit={{ opacity: 0, y: -20 }}
                 className="max-w-4xl mx-auto"
               >
-                <h1 className="text-3xl font-bold mb-8 text-foreground">Contract Analysis</h1>
+                <h1 className="text-4xl font-bold mb-2 text-center text-foreground">AI that simplifies your contract</h1>
+                <p className="text-lg text-muted-foreground text-center mb-12">Upload your contract and get instant insights, analysis, and recommendations.</p>
 
                 {/* File Info */}
-                <div className="mb-6 space-y-4">
+                <div className="mb-8 space-y-4">
                   <div className="flex items-center space-x-2 text-muted-foreground">
                     <FileText className="h-5 w-5" />
                     <span>{files[selectedFileId].file.name}</span>
@@ -436,7 +437,7 @@ export default function Home() {
                     >
                       <p className="text-sm text-primary">{files[selectedFileId].status}</p>
                       {files[selectedFileId].progress > 0 && (
-                        <Progress value={files[selectedFileId].progress} />
+                        <Progress value={files[selectedFileId].progress} className="h-2" />
                       )}
                     </motion.div>
                   )}
@@ -447,7 +448,7 @@ export default function Home() {
                   <motion.div
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
-                    className="mb-6 p-4 rounded-lg bg-destructive/10 text-destructive flex items-center space-x-2"
+                    className="mb-8 p-4 rounded-lg bg-destructive/10 text-destructive flex items-center space-x-2"
                   >
                     <AlertCircle className="h-5 w-5 flex-shrink-0" />
                     <p>{files[selectedFileId].error}</p>
@@ -459,29 +460,33 @@ export default function Home() {
                   <motion.div
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
-                    className="space-y-8"
+                    className="space-y-12"
                   >
-                    <div className="bg-card rounded-lg p-6 shadow-sm">
-                      <h3 className="text-xl font-semibold mb-4">Summary</h3>
-                      <p className="text-card-foreground whitespace-pre-wrap">{files[selectedFileId].summary}</p>
+                    <div className="bg-card rounded-xl p-8 shadow-sm border">
+                      <h3 className="text-2xl font-semibold mb-6">Summary</h3>
+                      <p className="text-card-foreground whitespace-pre-wrap leading-relaxed">{files[selectedFileId].summary}</p>
                     </div>
 
                     {files[selectedFileId].analysis && (
-                      <div className="space-y-6">
-                        <h3 className="text-xl font-semibold">Analysis</h3>
+                      <div className="space-y-8">
+                        <h3 className="text-2xl font-semibold">Analysis</h3>
                         
-                        <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+                        <div className="grid gap-8 md:grid-cols-2 lg:grid-cols-3">
                           <motion.div
                             initial={{ opacity: 0, y: 20 }}
                             animate={{ opacity: 1, y: 0 }}
-                            className="bg-card rounded-lg p-6 shadow-sm"
+                            className="bg-card rounded-xl p-8 shadow-sm border relative overflow-hidden"
                           >
-                            <h4 className="font-semibold text-lg mb-4">Key Insights</h4>
-                            <ul className="space-y-2">
+                            <div className="absolute top-0 left-0 w-full h-1 bg-primary/20" />
+                            <div className="flex items-center space-x-3 mb-6">
+                              <Lightbulb className="h-6 w-6 text-primary" />
+                              <h4 className="font-semibold text-xl">Key Insights</h4>
+                            </div>
+                            <ul className="space-y-4">
                               {files[selectedFileId].analysis.keyInsights.map((insight: string, i: number) => (
-                                <li key={i} className="flex items-start space-x-2">
-                                  <span className="text-primary">•</span>
-                                  <span>{insight}</span>
+                                <li key={i} className="flex items-start space-x-3 p-2 rounded hover:bg-muted/50 transition-colors">
+                                  <span className="text-primary mt-1">•</span>
+                                  <span className="text-card-foreground leading-relaxed">{insight}</span>
                                 </li>
                               ))}
                             </ul>
@@ -491,14 +496,18 @@ export default function Home() {
                             initial={{ opacity: 0, y: 20 }}
                             animate={{ opacity: 1, y: 0 }}
                             transition={{ delay: 0.1 }}
-                            className="bg-card rounded-lg p-6 shadow-sm"
+                            className="bg-card rounded-xl p-8 shadow-sm border relative overflow-hidden"
                           >
-                            <h4 className="font-semibold text-lg mb-4">Potential Issues</h4>
-                            <ul className="space-y-2">
+                            <div className="absolute top-0 left-0 w-full h-1 bg-destructive/20" />
+                            <div className="flex items-center space-x-3 mb-6">
+                              <AlertTriangle className="h-6 w-6 text-destructive" />
+                              <h4 className="font-semibold text-xl">Potential Issues</h4>
+                            </div>
+                            <ul className="space-y-4">
                               {files[selectedFileId].analysis.potentialIssues.map((issue: string, i: number) => (
-                                <li key={i} className="flex items-start space-x-2">
-                                  <span className="text-destructive">•</span>
-                                  <span>{issue}</span>
+                                <li key={i} className="flex items-start space-x-3 p-2 rounded hover:bg-muted/50 transition-colors">
+                                  <span className="text-destructive mt-1">•</span>
+                                  <span className="text-card-foreground leading-relaxed">{issue}</span>
                                 </li>
                               ))}
                             </ul>
@@ -508,14 +517,18 @@ export default function Home() {
                             initial={{ opacity: 0, y: 20 }}
                             animate={{ opacity: 1, y: 0 }}
                             transition={{ delay: 0.2 }}
-                            className="bg-card rounded-lg p-6 shadow-sm"
+                            className="bg-card rounded-xl p-8 shadow-sm border relative overflow-hidden"
                           >
-                            <h4 className="font-semibold text-lg mb-4">Recommendations</h4>
-                            <ul className="space-y-2">
+                            <div className="absolute top-0 left-0 w-full h-1 bg-primary/20" />
+                            <div className="flex items-center space-x-3 mb-6">
+                              <CheckCircle2 className="h-6 w-6 text-primary" />
+                              <h4 className="font-semibold text-xl">Recommendations</h4>
+                            </div>
+                            <ul className="space-y-4">
                               {files[selectedFileId].analysis.recommendations.map((rec: string, i: number) => (
-                                <li key={i} className="flex items-start space-x-2">
-                                  <span className="text-primary">•</span>
-                                  <span>{rec}</span>
+                                <li key={i} className="flex items-start space-x-3 p-2 rounded hover:bg-muted/50 transition-colors">
+                                  <span className="text-primary mt-1">•</span>
+                                  <span className="text-card-foreground leading-relaxed">{rec}</span>
                                 </li>
                               ))}
                             </ul>
@@ -532,11 +545,26 @@ export default function Home() {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="h-full flex items-center justify-center"
+                className="h-full flex flex-col items-center justify-center"
               >
+                <motion.h1 
+                  initial={{ opacity: 0, y: -20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="text-5xl font-bold mb-4 text-center text-foreground"
+                >
+                  AI that simplifies your contract
+                </motion.h1>
+                <motion.p 
+                  initial={{ opacity: 0, y: -20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.1 }}
+                  className="text-xl text-muted-foreground text-center mb-12"
+                >
+                  Upload your contract and get instant insights, analysis, and recommendations.
+                </motion.p>
                 <div
                   {...getRootProps()}
-                  className={`border-2 border-dashed rounded-lg p-12 text-center cursor-pointer transition-all max-w-2xl w-full mx-auto
+                  className={`border-2 border-dashed rounded-xl p-12 text-center cursor-pointer transition-all max-w-2xl w-full mx-auto
                     ${isDragActive 
                       ? 'border-primary bg-primary/5 scale-105' 
                       : 'border-muted hover:border-primary/50 hover:bg-muted/50'
@@ -546,16 +574,16 @@ export default function Home() {
                   <motion.div
                     initial={{ scale: 1 }}
                     animate={{ scale: isDragActive ? 1.1 : 1 }}
-                    className="space-y-4"
+                    className="space-y-6"
                   >
-                    <div className="w-20 h-20 mx-auto rounded-full bg-primary/10 flex items-center justify-center">
-                      <Upload className="h-10 w-10 text-primary" />
+                    <div className="w-24 h-24 mx-auto rounded-full bg-primary/10 flex items-center justify-center">
+                      <Upload className="h-12 w-12 text-primary" />
                     </div>
                     {isDragActive ? (
-                      <p className="text-lg text-primary font-medium">Drop the file here...</p>
+                      <p className="text-xl text-primary font-medium">Drop the file here...</p>
                     ) : (
                       <>
-                        <p className="text-lg text-foreground font-medium">
+                        <p className="text-xl text-foreground font-medium">
                           Drag and drop your contract here
                         </p>
                         <p className="text-sm text-muted-foreground">
