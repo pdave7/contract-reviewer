@@ -3,6 +3,11 @@
 import { useState, useEffect } from 'react';
 import { useDropzone } from 'react-dropzone';
 import dynamic from 'next/dynamic';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Button } from '@/components/ui/button';
+import { Progress } from '@/components/ui/progress';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { FileText, Upload, X, Plus, AlertCircle } from 'lucide-react';
 
 interface Analysis {
   keyInsights: string[];
@@ -334,146 +339,237 @@ export default function Home() {
   });
 
   return (
-    <div className="flex min-h-screen">
-      {/* Sidebar */}
-      <div className="w-64 bg-gray-800 p-6 flex flex-col">
-        <div className="flex justify-between items-center mb-6">
-          <h2 className="text-xl font-bold">Contract Reviewer</h2>
-          <button
-            onClick={handleAddFile}
-            className="bg-blue-700 text-white p-2 rounded hover:bg-blue-800"
-          >
-            + Add
-          </button>
-        </div>
-        <div className="flex-1 overflow-y-auto">
-          {Object.entries(files).map(([fileId, fileData]) => (
-            <div
-              key={fileId}
-              className={`p-3 mb-2 rounded cursor-pointer flex justify-between items-center ${
-                selectedFileId === fileId ? 'bg-blue-300' : 'hover:bg-gray-200'
-              }`}
-              onClick={() => setSelectedFileId(fileId)}
-            >
-              <span className="truncate flex-1">{fileData.file.name}</span>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleDeleteFile(fileId);
-                }}
-                className="ml-2 text-red-500 hover:text-red-700"
-              >
-                ×
-              </button>
-            </div>
-          ))}
-        </div>
-      </div>
+    <TooltipProvider>
+      <div className="flex min-h-screen bg-background">
+        {/* Sidebar */}
+        <motion.div 
+          initial={{ x: -300 }}
+          animate={{ x: 0 }}
+          className="w-80 bg-muted/40 p-6 flex flex-col border-r"
+        >
+          <div className="flex justify-between items-center mb-6">
+            <h2 className="text-2xl font-bold text-foreground">Contract Reviewer</h2>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  onClick={handleAddFile}
+                  variant="outline"
+                  size="icon"
+                  className="rounded-full"
+                >
+                  <Plus className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Add new contract</TooltipContent>
+            </Tooltip>
+          </div>
+          <div className="flex-1 overflow-y-auto space-y-2">
+            <AnimatePresence>
+              {Object.entries(files).map(([fileId, fileData]) => (
+                <motion.div
+                  key={fileId}
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, x: -100 }}
+                  className={`p-4 rounded-lg cursor-pointer flex items-center space-x-3 transition-colors ${
+                    selectedFileId === fileId 
+                      ? 'bg-primary/10 text-primary'
+                      : 'hover:bg-muted'
+                  }`}
+                  onClick={() => setSelectedFileId(fileId)}
+                >
+                  <FileText className="h-5 w-5 flex-shrink-0" />
+                  <span className="truncate flex-1 text-sm">{fileData.file.name}</span>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDeleteFile(fileId);
+                        }}
+                        variant="ghost"
+                        size="icon"
+                        className="opacity-0 group-hover:opacity-100 h-8 w-8"
+                      >
+                        <X className="h-4 w-4" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>Delete file</TooltipContent>
+                  </Tooltip>
+                </motion.div>
+              ))}
+            </AnimatePresence>
+          </div>
+        </motion.div>
 
-      {/* Main Content */}
-      <div className="flex-1 p-8">
-        {selectedFileId && files[selectedFileId] ? (
-          <div className="max-w-3xl mx-auto">
-            <h1 className="text-3xl font-bold mb-8">Contract Analysis</h1>
-
-            {/* File Info */}
-            <div className="mb-6">
-              <h3 className="text-lg font-semibold mb-2">Selected File:</h3>
-              <p className="text-gray-600">{files[selectedFileId].file.name}</p>
-              <button
-                onClick={() => handleReview(selectedFileId)}
-                disabled={files[selectedFileId].loading}
-                className="mt-4 bg-blue-500 text-white px-6 py-2 rounded hover:bg-blue-600 disabled:bg-gray-400"
+        {/* Main Content */}
+        <div className="flex-1 p-8">
+          <AnimatePresence mode="wait">
+            {selectedFileId && files[selectedFileId] ? (
+              <motion.div
+                key="analysis"
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -20 }}
+                className="max-w-4xl mx-auto"
               >
-                {files[selectedFileId].loading ? 'Analyzing...' : 'Request Review'}
-              </button>
-              {files[selectedFileId].status && (
-                <div className="mt-4">
-                  <p className="text-sm text-blue-600">{files[selectedFileId].status}</p>
-                  {files[selectedFileId].progress > 0 && (
-                    <div className="w-full bg-gray-200 rounded-full h-2.5 mt-2">
-                      <div
-                        className="bg-blue-600 h-2.5 rounded-full transition-all duration-300"
-                        style={{ width: `${files[selectedFileId].progress}%` }}
-                      ></div>
-                    </div>
+                <h1 className="text-3xl font-bold mb-8 text-foreground">Contract Analysis</h1>
+
+                {/* File Info */}
+                <div className="mb-6 space-y-4">
+                  <div className="flex items-center space-x-2 text-muted-foreground">
+                    <FileText className="h-5 w-5" />
+                    <span>{files[selectedFileId].file.name}</span>
+                  </div>
+                  <Button
+                    onClick={() => handleReview(selectedFileId)}
+                    disabled={files[selectedFileId].loading}
+                    className="w-full sm:w-auto"
+                  >
+                    {files[selectedFileId].loading ? 'Analyzing...' : 'Request Review'}
+                  </Button>
+                  {files[selectedFileId].status && (
+                    <motion.div
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      className="space-y-2"
+                    >
+                      <p className="text-sm text-primary">{files[selectedFileId].status}</p>
+                      {files[selectedFileId].progress > 0 && (
+                        <Progress value={files[selectedFileId].progress} />
+                      )}
+                    </motion.div>
                   )}
                 </div>
-              )}
-            </div>
 
-            {/* Error Message */}
-            {files[selectedFileId].error && (
-              <div className="text-red-500 mb-6">
-                {files[selectedFileId].error}
-              </div>
-            )}
-
-            {/* Results */}
-            {files[selectedFileId].summary && (
-              <div className="space-y-6">
-                <div>
-                  <h3 className="text-xl font-semibold mb-2">Summary</h3>
-                  <p className="text-gray-700 whitespace-pre-wrap">{files[selectedFileId].summary}</p>
-                </div>
-
-                {files[selectedFileId].analysis && (
-                  <div>
-                    <h3 className="text-xl font-semibold mb-2">Analysis</h3>
-                    
-                    <div className="space-y-4">
-                      <div>
-                        <h4 className="font-semibold text-lg">Key Insights</h4>
-                        <ul className="list-disc pl-5">
-                          {files[selectedFileId].analysis.keyInsights.map((insight: string, i: number) => (
-                            <li key={i}>{insight}</li>
-                          ))}
-                        </ul>
-                      </div>
-
-                      <div>
-                        <h4 className="font-semibold text-lg">Potential Issues</h4>
-                        <ul className="list-disc pl-5">
-                          {files[selectedFileId].analysis.potentialIssues.map((issue: string, i: number) => (
-                            <li key={i}>{issue}</li>
-                          ))}
-                        </ul>
-                      </div>
-
-                      <div>
-                        <h4 className="font-semibold text-lg">Recommendations</h4>
-                        <ul className="list-disc pl-5">
-                          {files[selectedFileId].analysis.recommendations.map((rec: string, i: number) => (
-                            <li key={i}>{rec}</li>
-                          ))}
-                        </ul>
-                      </div>
-                    </div>
-                  </div>
+                {/* Error Message */}
+                {files[selectedFileId].error && (
+                  <motion.div
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    className="mb-6 p-4 rounded-lg bg-destructive/10 text-destructive flex items-center space-x-2"
+                  >
+                    <AlertCircle className="h-5 w-5 flex-shrink-0" />
+                    <p>{files[selectedFileId].error}</p>
+                  </motion.div>
                 )}
-              </div>
-            )}
-          </div>
-        ) : (
-          <div
-            {...getRootProps()}
-            className={`border-2 border-dashed rounded-lg p-8 mb-6 text-center cursor-pointer max-w-3xl mx-auto
-              ${isDragActive ? 'border-blue-500 bg-blue-50' : 'border-gray-300'}`}
-          >
-            <input {...getInputProps()} />
-            {isDragActive ? (
-              <p>Drop the file here...</p>
+
+                {/* Results */}
+                {files[selectedFileId].summary && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="space-y-8"
+                  >
+                    <div className="bg-card rounded-lg p-6 shadow-sm">
+                      <h3 className="text-xl font-semibold mb-4">Summary</h3>
+                      <p className="text-card-foreground whitespace-pre-wrap">{files[selectedFileId].summary}</p>
+                    </div>
+
+                    {files[selectedFileId].analysis && (
+                      <div className="space-y-6">
+                        <h3 className="text-xl font-semibold">Analysis</h3>
+                        
+                        <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+                          <motion.div
+                            initial={{ opacity: 0, y: 20 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            className="bg-card rounded-lg p-6 shadow-sm"
+                          >
+                            <h4 className="font-semibold text-lg mb-4">Key Insights</h4>
+                            <ul className="space-y-2">
+                              {files[selectedFileId].analysis.keyInsights.map((insight: string, i: number) => (
+                                <li key={i} className="flex items-start space-x-2">
+                                  <span className="text-primary">•</span>
+                                  <span>{insight}</span>
+                                </li>
+                              ))}
+                            </ul>
+                          </motion.div>
+
+                          <motion.div
+                            initial={{ opacity: 0, y: 20 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            transition={{ delay: 0.1 }}
+                            className="bg-card rounded-lg p-6 shadow-sm"
+                          >
+                            <h4 className="font-semibold text-lg mb-4">Potential Issues</h4>
+                            <ul className="space-y-2">
+                              {files[selectedFileId].analysis.potentialIssues.map((issue: string, i: number) => (
+                                <li key={i} className="flex items-start space-x-2">
+                                  <span className="text-destructive">•</span>
+                                  <span>{issue}</span>
+                                </li>
+                              ))}
+                            </ul>
+                          </motion.div>
+
+                          <motion.div
+                            initial={{ opacity: 0, y: 20 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            transition={{ delay: 0.2 }}
+                            className="bg-card rounded-lg p-6 shadow-sm"
+                          >
+                            <h4 className="font-semibold text-lg mb-4">Recommendations</h4>
+                            <ul className="space-y-2">
+                              {files[selectedFileId].analysis.recommendations.map((rec: string, i: number) => (
+                                <li key={i} className="flex items-start space-x-2">
+                                  <span className="text-primary">•</span>
+                                  <span>{rec}</span>
+                                </li>
+                              ))}
+                            </ul>
+                          </motion.div>
+                        </div>
+                      </div>
+                    )}
+                  </motion.div>
+                )}
+              </motion.div>
             ) : (
-              <div>
-                <p>Drag and drop a file here, or click to select a file</p>
-                <p className="text-sm text-gray-500 mt-2">
-                  Supported formats: .txt, .doc, .docx, .pdf
-                </p>
-              </div>
+              <motion.div
+                key="dropzone"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="h-full flex items-center justify-center"
+              >
+                <div
+                  {...getRootProps()}
+                  className={`border-2 border-dashed rounded-lg p-12 text-center cursor-pointer transition-all max-w-2xl w-full mx-auto
+                    ${isDragActive 
+                      ? 'border-primary bg-primary/5 scale-105' 
+                      : 'border-muted hover:border-primary/50 hover:bg-muted/50'
+                    }`}
+                >
+                  <input {...getInputProps()} />
+                  <motion.div
+                    initial={{ scale: 1 }}
+                    animate={{ scale: isDragActive ? 1.1 : 1 }}
+                    className="space-y-4"
+                  >
+                    <div className="w-20 h-20 mx-auto rounded-full bg-primary/10 flex items-center justify-center">
+                      <Upload className="h-10 w-10 text-primary" />
+                    </div>
+                    {isDragActive ? (
+                      <p className="text-lg text-primary font-medium">Drop the file here...</p>
+                    ) : (
+                      <>
+                        <p className="text-lg text-foreground font-medium">
+                          Drag and drop your contract here
+                        </p>
+                        <p className="text-sm text-muted-foreground">
+                          Supported formats: .txt, .doc, .docx, .pdf
+                        </p>
+                      </>
+                    )}
+                  </motion.div>
+                </div>
+              </motion.div>
             )}
-          </div>
-        )}
+          </AnimatePresence>
+        </div>
       </div>
-    </div>
+    </TooltipProvider>
   );
 }
