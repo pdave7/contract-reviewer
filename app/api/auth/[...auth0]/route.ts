@@ -1,5 +1,6 @@
 import { handleAuth, handleCallback } from '@auth0/nextjs-auth0';
 import { prisma } from '@/lib/db';
+import { NextResponse } from 'next/server';
 
 export const runtime = 'nodejs';
 
@@ -34,11 +35,9 @@ export const GET = handleAuth({
   }),
   onError(req: Request, error: Error) {
     console.error('Auth error:', error);
-    return new Response(null, {
-      status: 302,
-      headers: {
-        Location: '/auth/signin?error=' + encodeURIComponent(error.message)
-      }
-    });
+    const returnUrl = new URL('/auth/signin', process.env.AUTH0_BASE_URL || 'http://localhost:3000');
+    returnUrl.searchParams.set('error', error.message);
+    
+    return NextResponse.redirect(returnUrl.toString());
   }
 }); 

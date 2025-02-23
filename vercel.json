@@ -1,0 +1,10 @@
+{
+  "buildCommand": "prisma generate && next build",
+  "devCommand": "next dev",
+  "installCommand": "npm install",
+  "framework": "nextjs",
+  "regions": ["sfo1"],
+  "env": {
+    "NEXTAUTH_SECRET": "c9a3d2b7e8f4a1d6e9c2b5a8d7f4e1c9"
+  }
+} 
