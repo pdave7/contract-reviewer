@@ -10,11 +10,22 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { FileText, Upload, X, Plus, AlertCircle, Lightbulb, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ArrowLeft } from 'lucide-react';
+import { useUser } from '@auth0/nextjs-auth0/client';
 
 interface Analysis {
   keyInsights: string[];
   potentialIssues: string[];
   recommendations: string[];
+}
+
+interface Contract {
+  id: string;
+  name: string;
+  summary: string;
+  analysis: Analysis | null;
+  status: string;
+  createdAt: string;
+  fileType: string;
 }
 
 interface FileData {
@@ -32,13 +43,16 @@ interface FileData {
 let pdfjsLib: typeof import('pdfjs-dist') | null = null;
 
 export default function Home() {
+  const { user, isLoading: isUserLoading } = useUser();
   const [files, setFiles] = useState<{ [key: string]: FileData }>({});
+  const [contracts, setContracts] = useState<Contract[]>([]);
   const [selectedFileId, setSelectedFileId] = useState<string | null>(null);
   const [retryCount, setRetryCount] = useState(0);
   const maxRetries = 3;
   const [showProgress, setShowProgress] = useState(true);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [contractToDelete, setContractToDelete] = useState<string | null>(null);
+  const [isLoadingContracts, setIsLoadingContracts] = useState(false);
 
   // Initialize PDF.js on the client side
   useEffect(() => {
@@ -55,6 +69,26 @@ export default function Home() {
     };
     loadPdfjs();
   }, []);
+
+  useEffect(() => {
+    if (user) {
+      fetchContracts();
+    }
+  }, [user]);
+
+  const fetchContracts = async () => {
+    try {
+      setIsLoadingContracts(true);
+      const response = await fetch('/api/contracts');
+      if (!response.ok) throw new Error('Failed to fetch contracts');
+      const data = await response.json();
+      setContracts(data);
+    } catch (error) {
+      console.error('Error fetching contracts:', error);
+    } finally {
+      setIsLoadingContracts(false);
+    }
+  };
 
   const resetFileState = (fileId: string) => {
     setFiles(prev => ({
@@ -370,7 +404,7 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-background">
       <AnimatePresence mode="wait">
-        {selectedFileId && files[selectedFileId] ? (
+        {selectedFileId && (files[selectedFileId] || contracts.find(c => c.id === selectedFileId)) ? (
           // Contract Detail View
           <motion.div
             key="detail"
@@ -394,26 +428,33 @@ export default function Home() {
                 {/* Contract Header */}
                 <div className="flex items-center justify-between">
                   <div>
-                    <h1 className="text-3xl font-bold text-foreground mb-2">{files[selectedFileId].file.name}</h1>
+                    <h1 className="text-3xl font-bold text-foreground mb-2">
+                      {files[selectedFileId]?.file.name || contracts.find(c => c.id === selectedFileId)?.name}
+                    </h1>
                     <p className="text-sm text-muted-foreground">
-                      Uploaded on {new Date().toLocaleDateString()}
+                      {files[selectedFileId] ? 
+                        `Uploaded on ${new Date().toLocaleDateString()}` :
+                        `Uploaded on ${new Date(contracts.find(c => c.id === selectedFileId)?.createdAt || '').toLocaleDateString()}`
+                      }
                     </p>
                   </div>
-                  <Button
-                    onClick={() => handleReview(selectedFileId)}
-                    disabled={files[selectedFileId].loading}
-                    className="w-auto"
-                  >
-                    {files[selectedFileId].loading 
-                      ? 'Analyzing...' 
-                      : files[selectedFileId].analysis 
-                        ? 'Analyze again'
-                        : 'Request Review'}
-                  </Button>
+                  {files[selectedFileId] && (
+                    <Button
+                      onClick={() => handleReview(selectedFileId)}
+                      disabled={files[selectedFileId].loading}
+                      className="w-auto"
+                    >
+                      {files[selectedFileId].loading 
+                        ? 'Analyzing...' 
+                        : files[selectedFileId].analysis 
+                          ? 'Analyze again'
+                          : 'Request Review'}
+                    </Button>
+                  )}
                 </div>
 
                 {/* Progress and Status */}
-                {files[selectedFileId].status && (
+                {files[selectedFileId]?.status && (
                   <motion.div
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
@@ -427,7 +468,7 @@ export default function Home() {
                 )}
 
                 {/* Error Message */}
-                {files[selectedFileId].error && (
+                {files[selectedFileId]?.error && (
                   <motion.div
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
@@ -439,7 +480,7 @@ export default function Home() {
                 )}
 
                 {/* Analysis Results */}
-                {files[selectedFileId].analysis && (
+                {(files[selectedFileId]?.analysis || contracts.find(c => c.id === selectedFileId)?.analysis) && (
                   <motion.div
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
@@ -457,7 +498,9 @@ export default function Home() {
                         <h4 className="font-semibold text-xl">Key Insights</h4>
                       </div>
                       <ul className="space-y-4">
-                        {files[selectedFileId].analysis.keyInsights.map((insight: string, i: number) => (
+                        {(files[selectedFileId]?.analysis?.keyInsights || 
+                          contracts.find(c => c.id === selectedFileId)?.analysis?.keyInsights || []
+                        ).map((insight: string, i: number) => (
                           <li key={i} className="flex items-start space-x-3 p-2 rounded hover:bg-muted/50 transition-colors">
                             <span className="text-primary mt-1">•</span>
                             <span className="text-card-foreground leading-relaxed">{insight}</span>
@@ -479,7 +522,9 @@ export default function Home() {
                         <h4 className="font-semibold text-xl">Potential Issues</h4>
                       </div>
                       <ul className="space-y-4">
-                        {files[selectedFileId].analysis.potentialIssues.map((issue: string, i: number) => (
+                        {(files[selectedFileId]?.analysis?.potentialIssues ||
+                          contracts.find(c => c.id === selectedFileId)?.analysis?.potentialIssues || []
+                        ).map((issue: string, i: number) => (
                           <li key={i} className="flex items-start space-x-3 p-2 rounded hover:bg-muted/50 transition-colors">
                             <span className="text-destructive mt-1">•</span>
                             <span className="text-card-foreground leading-relaxed">{issue}</span>
@@ -501,7 +546,9 @@ export default function Home() {
                         <h4 className="font-semibold text-xl">Recommendations</h4>
                       </div>
                       <ul className="space-y-4">
-                        {files[selectedFileId].analysis.recommendations.map((rec: string, i: number) => (
+                        {(files[selectedFileId]?.analysis?.recommendations ||
+                          contracts.find(c => c.id === selectedFileId)?.analysis?.recommendations || []
+                        ).map((rec: string, i: number) => (
                           <li key={i} className="flex items-start space-x-3 p-2 rounded hover:bg-muted/50 transition-colors">
                             <span className="text-primary mt-1">•</span>
                             <span className="text-card-foreground leading-relaxed">{rec}</span>
@@ -547,39 +594,47 @@ export default function Home() {
               </div>
 
               {/* Contract Cards */}
-              {Object.entries(files).map(([fileId, fileData]) => (
+              {[...Object.entries(files), ...contracts.map(c => [c.id, c] as [string, Contract])].map(([id, data]) => (
                 <motion.div
-                  key={fileId}
+                  key={id}
                   initial={{ opacity: 0, scale: 0.95 }}
                   animate={{ opacity: 1, scale: 1 }}
                   className="aspect-square rounded-xl border bg-card p-6 relative cursor-pointer hover:shadow-md transition-all"
-                  onClick={() => setSelectedFileId(fileId)}
+                  onClick={() => setSelectedFileId(id)}
                 >
                   <Button
                     variant="ghost"
                     size="icon"
                     className="absolute top-2 right-2 h-8 w-8 opacity-0 group-hover:opacity-100 hover:bg-destructive/10 hover:text-destructive"
-                    onClick={(e) => handleDeleteClick(fileId, e)}
+                    onClick={(e) => handleDeleteClick(id, e)}
                   >
                     <X className="h-4 w-4" />
                   </Button>
                   <div className="h-full flex flex-col">
                     <div className="mb-4">
                       <FileText className="h-8 w-8 text-primary mb-2" />
-                      <h3 className="font-medium truncate">{fileData.file.name}</h3>
+                      <h3 className="font-medium truncate">
+                        {'file' in data ? data.file.name : data.name}
+                      </h3>
                       <p className="text-sm text-muted-foreground">
-                        Uploaded on {new Date().toLocaleDateString()}
+                        {'file' in data ? 
+                          `Uploaded on ${new Date().toLocaleDateString()}` :
+                          `Uploaded on ${new Date(data.createdAt).toLocaleDateString()}`
+                        }
                       </p>
                     </div>
                     <div className="mt-auto">
                       <div className={`text-sm font-medium ${
-                        fileData.analysis ? 'text-primary' : 'text-muted-foreground'
+                        ('file' in data ? data.analysis : data.analysis) ? 'text-primary' : 'text-muted-foreground'
                       }`}>
-                        {fileData.loading ? 'Analyzing...' :
-                         fileData.analysis ? 'Reviewed' : 'Pending Review'}
+                        {'file' in data ? 
+                          (data.loading ? 'Analyzing...' :
+                           data.analysis ? 'Reviewed' : 'Pending Review') :
+                          'Reviewed'
+                        }
                       </div>
-                      {fileData.loading && fileData.progress > 0 && (
-                        <Progress value={fileData.progress} className="h-1 mt-2" />
+                      {'file' in data && data.loading && data.progress > 0 && (
+                        <Progress value={data.progress} className="h-1 mt-2" />
                       )}
                     </div>
                   </div>

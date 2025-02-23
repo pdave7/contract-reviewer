@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
 import OpenAI from 'openai';
+import { getSession } from '@auth0/nextjs-auth0';
+import { prisma } from '@/lib/db';
 
 interface StreamMessage {
   type: 'status' | 'progress' | 'complete' | 'error' | 'ping';
@@ -150,7 +152,7 @@ function cleanJsonString(str: string): string {
   return str;
 }
 
-export const runtime = 'edge';
+export const runtime = 'nodejs';
 
 export async function POST(req: Request) {
   const encoder = new TextEncoder();
@@ -181,6 +183,11 @@ export async function POST(req: Request) {
   };
 
   try {
+    const session = await getSession(req, new NextResponse());
+    if (!session?.user?.sub) {
+      throw new Error('Not authenticated');
+    }
+
     if (!process.env.OPENAI_API_KEY) {
       throw new Error('OpenAI API key is not configured');
     }
@@ -354,16 +361,54 @@ export async function POST(req: Request) {
               !parsedAnalysis.recommendations || !Array.isArray(parsedAnalysis.recommendations)) {
             throw new Error('Invalid analysis format');
           }
+
+          // First send the analysis to the client
+          await writeChunk({ 
+            type: 'complete',
+            summary: combinedSummary,
+            analysis: parsedAnalysis
+          });
+
+          // Then attempt to save to database
+          try {
+            // First check if the user exists
+            const user = await prisma.user.findUnique({
+              where: { id: session.user.sub }
+            });
+
+            if (!user) {
+              // Create the user if they don't exist
+              await prisma.user.create({
+                data: {
+                  id: session.user.sub,
+                  email: session.user.email || '',
+                  name: session.user.name || '',
+                  image: session.user.picture || ''
+                }
+              });
+            }
+
+            const savedContract = await prisma.contract.create({
+              data: {
+                name: fileData.name || 'Untitled Contract',
+                content: textContent,
+                summary: combinedSummary,
+                analysis: parsedAnalysis,
+                userId: session.user.sub,
+                status: 'analyzed',
+                fileType: fileData.type || 'text'
+              }
+            });
+            console.log('Contract saved:', savedContract.id);
+          } catch (dbError) {
+            console.error('Database error:', dbError);
+            // Continue since we already sent the analysis to the client
+          }
+
         } catch (parseError) {
           console.error('JSON parsing error:', parseError, 'Content:', analysisContent);
           throw new Error('Failed to parse analysis response');
         }
-
-        await writeChunk({ 
-          type: 'complete',
-          summary: combinedSummary,
-          analysis: parsedAnalysis
-        });
 
       } catch (error) {
         console.error('Processing error:', error);
@@ -396,12 +441,12 @@ export async function POST(req: Request) {
     } catch (closeError) {
       console.error('Error closing writer:', closeError);
     }
-    return new NextResponse(
-      JSON.stringify({ 
-        success: false, 
-        error: 'Error processing document: ' + (error instanceof Error ? error.message : 'Unknown error')
-      }),
-      { status: 500 }
-    );
+    return new NextResponse(stream.readable, {
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+      },
+    });
   }
 } 
