@@ -10,12 +10,28 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { FileText, Upload, X, Plus, AlertCircle, Lightbulb, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ArrowLeft } from 'lucide-react';
-import { useUser } from '@auth0/nextjs-auth0/client';
+import { useSession } from 'next-auth/react';
+import axios from 'axios';
 
 interface Analysis {
-  keyInsights: string[];
-  potentialIssues: string[];
-  recommendations: string[];
+  keyInsights: {
+    summary: string;
+    points: string[];
+  };
+  potentialIssues: {
+    summary: string;
+    points: string[];
+  };
+  recommendations: {
+    summary: string;
+    points: string[];
+  };
+  financialTerms: {
+    propertyValue: string;
+    paymentSchedule: string;
+    additionalCosts: string[];
+    financialConditions: string[];
+  };
 }
 
 interface Contract {
@@ -29,21 +45,21 @@ interface Contract {
 }
 
 interface FileData {
-  id: string;
-  file: File;
-  summary: string;
-  analysis: Analysis | null;
-  error: string;
-  status: string;
-  progress: number;
-  loading: boolean;
+  name: string;
+  file?: File;
+  analysis?: Analysis | null;
+  status?: string;
+  progress?: number;
+  loading?: boolean;
+  createdAt?: string;
+  error?: string;
 }
 
 // Dynamically import PDF.js only on the client side
 let pdfjsLib: typeof import('pdfjs-dist') | null = null;
 
 export default function Home() {
-  const { user, isLoading: isUserLoading } = useUser();
+  const { data: session, status } = useSession();
   const [files, setFiles] = useState<{ [key: string]: FileData }>({});
   const [contracts, setContracts] = useState<Contract[]>([]);
   const [selectedFileId, setSelectedFileId] = useState<string | null>(null);
@@ -53,6 +69,11 @@ export default function Home() {
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [contractToDelete, setContractToDelete] = useState<string | null>(null);
   const [isLoadingContracts, setIsLoadingContracts] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [progress, setProgress] = useState<string>('Uploading file...');
+  const [analysis, setAnalysis] = useState<Analysis | null>(null);
+  const [fileData, setFileData] = useState<FileData | null>(null);
 
   // Initialize PDF.js on the client side
   useEffect(() => {
@@ -71,10 +92,12 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    if (user) {
+    if (status === 'authenticated') {
       fetchContracts();
+    } else if (status === 'unauthenticated') {
+      setIsLoading(false);
     }
-  }, [user]);
+  }, [status]);
 
   const fetchContracts = async () => {
     try {
@@ -180,41 +203,69 @@ export default function Home() {
     }
   };
 
-  const attemptAnalysis = async (text: string, fileId: string, attempt: number = 1): Promise<void> => {
-    const maxAttempts = 3;
-    const backoffDelay = Math.min(1000 * Math.pow(2, attempt - 1), 8000);
+  const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
 
+    if (file.size > 100 * 1024 * 1024) {
+      setError('File size must be less than 100MB');
+      return;
+    }
+
+    setFileData({
+      name: file.name,
+      file
+    });
+    setError(null);
+    setProgress('');
+    setAnalysis(null);
+
+    // Automatically start analysis
+    handleAnalysis(file);
+  };
+
+  const handleAnalysis = async (file: File) => {
     try {
-      const response = await fetch('/api/analyze', {
-        method: 'POST',
+      setIsLoading(true);
+      setError(null);
+      setProgress('Preparing file for upload...');
+
+      const formData = new FormData();
+      formData.append('file', file);
+
+      setProgress('Uploading file...');
+      const response = await axios.post('/api/upload', formData, {
         headers: {
-          'Content-Type': 'application/json',
+          'Content-Type': 'multipart/form-data',
         },
-        body: JSON.stringify({ content: text }),
+        onUploadProgress: (progressEvent) => {
+          if (progressEvent.total) {
+            const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+            setProgress(`Uploading file: ${percentCompleted}%`);
+          }
+        },
+        timeout: 300000, // 5 minutes
       });
 
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+      if (response.data.error) {
+        throw new Error(response.data.error);
       }
 
-      await processStream(response, fileId);
-      setRetryCount(0);
-    } catch (error) {
-      console.error(`Attempt ${attempt} failed:`, error);
-      
-      if (attempt < maxAttempts) {
-        setFiles(prev => ({
-          ...prev,
-          [fileId]: {
-            ...prev[fileId],
-            status: `Connection issue. Retrying in ${backoffDelay/1000} seconds... (${attempt}/${maxAttempts})`
-          }
-        }));
-        await new Promise(resolve => setTimeout(resolve, backoffDelay));
-        return attemptAnalysis(text, fileId, attempt + 1);
+      if (response.data.analysis) {
+        setAnalysis(response.data.analysis);
+        setProgress('Analysis complete!');
+        
+        // Refresh the contracts list
+        await fetchContracts();
+      } else {
+        throw new Error('No analysis received from server');
       }
-      
-      throw error;
+    } catch (err) {
+      console.error('Error during analysis:', err);
+      setError(err instanceof Error ? err.message : 'An error occurred during analysis');
+      setProgress('');
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -244,100 +295,11 @@ export default function Home() {
   };
 
   const handleReview = async (fileId: string) => {
-    const fileData = files[fileId];
-    if (!fileData) return;
+    const file = fileData?.file;
+    if (!file) return;
 
     setShowProgress(true);
-
-    setFiles(prev => ({
-      ...prev,
-      [fileId]: {
-        ...prev[fileId],
-        loading: true,
-        error: '',
-        status: 'Reading file...',
-        progress: 0,
-      }
-    }));
-
-    try {
-      const reader = new FileReader();
-      reader.onload = async (e) => {
-        let text: string;
-        const fileContent = e.target?.result;
-        
-        if (fileData.file.type === 'application/pdf') {
-          if (!(fileContent instanceof ArrayBuffer)) {
-            throw new Error('Failed to read PDF file');
-          }
-          
-          text = await extractTextFromPDF(fileContent);
-          
-          if (!text.trim()) {
-            throw new Error('No text could be extracted from the PDF');
-          }
-        } else {
-          if (typeof fileContent !== 'string') {
-            throw new Error('Failed to read text file');
-          }
-          text = fileContent;
-        }
-
-        setFiles(prev => ({
-          ...prev,
-          [fileId]: {
-            ...prev[fileId],
-            status: 'Initializing analysis...',
-          }
-        }));
-        
-        try {
-          await attemptAnalysis(JSON.stringify({
-            type: fileData.file.type === 'application/pdf' ? 'pdf' : 'text',
-            content: text,
-            name: fileData.file.name
-          }), fileId);
-        } catch (error) {
-          setFiles(prev => ({
-            ...prev,
-            [fileId]: {
-              ...prev[fileId],
-              error: 'Failed to analyze document: ' + (error instanceof Error ? error.message : 'Unknown error'),
-              status: '',
-              loading: false,
-            }
-          }));
-        }
-      };
-
-      reader.onerror = () => {
-        setFiles(prev => ({
-          ...prev,
-          [fileId]: {
-            ...prev[fileId],
-            error: 'Failed to read the file. Please try again.',
-            status: '',
-            loading: false,
-          }
-        }));
-      };
-
-      if (fileData.file.type === 'application/pdf') {
-        reader.readAsArrayBuffer(fileData.file);
-      } else {
-        reader.readAsText(fileData.file);
-      }
-    } catch (error) {
-      setFiles(prev => ({
-        ...prev,
-        [fileId]: {
-          ...prev[fileId],
-          error: 'Error processing file: ' + (error instanceof Error ? error.message : 'Unknown error'),
-          status: '',
-          loading: false,
-        }
-      }));
-    }
+    await handleAnalysis(file);
   };
 
   const handleAddFile = () => {
@@ -359,23 +321,21 @@ export default function Home() {
     onDrop: (acceptedFiles) => {
       const file = acceptedFiles[0];
       if (file.size > 100 * 1024 * 1024) {
+        setError('File size must be less than 100MB');
         return;
       }
-      const newFileId = `file-${Date.now()}`;
-      setFiles(prev => ({
-        ...prev,
-        [newFileId]: {
-          id: newFileId,
-          file,
-          summary: '',
-          analysis: null,
-          error: '',
-          status: '',
-          progress: 0,
-          loading: false,
-        }
-      }));
-      setSelectedFileId(newFileId);
+
+      // Set the file data directly instead of using the files state
+      setFileData({
+        name: file.name,
+        file
+      });
+      setError(null);
+      setProgress('');
+      setAnalysis(null);
+
+      // Automatically start analysis
+      handleAnalysis(file);
     },
     maxFiles: 1,
     multiple: false,
@@ -404,7 +364,7 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-background">
       <AnimatePresence mode="wait">
-        {selectedFileId && (files[selectedFileId] || contracts.find(c => c.id === selectedFileId)) ? (
+        {fileData ? (
           // Contract Detail View
           <motion.div
             key="detail"
@@ -417,7 +377,12 @@ export default function Home() {
               {/* Back Button */}
               <Button
                 variant="ghost"
-                onClick={() => setSelectedFileId(null)}
+                onClick={() => {
+                  setFileData(null);
+                  setAnalysis(null);
+                  setProgress('');
+                  setError(null);
+                }}
                 className="mb-8 -ml-2 text-muted-foreground hover:text-foreground"
               >
                 <ArrowLeft className="h-5 w-5 mr-2" />
@@ -429,63 +394,62 @@ export default function Home() {
                 <div className="flex items-center justify-between">
                   <div>
                     <h1 className="text-3xl font-bold text-foreground mb-2">
-                      {files[selectedFileId]?.file.name || contracts.find(c => c.id === selectedFileId)?.name}
+                      {fileData.name}
                     </h1>
                     <p className="text-sm text-muted-foreground">
-                      {files[selectedFileId] ? 
-                        `Uploaded on ${new Date().toLocaleDateString()}` :
-                        `Uploaded on ${new Date(contracts.find(c => c.id === selectedFileId)?.createdAt || '').toLocaleDateString()}`
-                      }
+                      Uploaded on {new Date().toLocaleDateString()}
                     </p>
                   </div>
-                  {files[selectedFileId] && (
-                    <Button
-                      onClick={() => handleReview(selectedFileId)}
-                      disabled={files[selectedFileId].loading}
-                      className="w-auto"
-                    >
-                      {files[selectedFileId].loading 
-                        ? 'Analyzing...' 
-                        : files[selectedFileId].analysis 
-                          ? 'Analyze again'
-                          : 'Request Review'}
-                    </Button>
-                  )}
                 </div>
 
                 {/* Progress and Status */}
-                {files[selectedFileId]?.status && (
+                {progress && (
                   <motion.div
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
                     className="space-y-2"
                   >
-                    <p className="text-sm text-primary">{files[selectedFileId].status}</p>
-                    {files[selectedFileId].progress > 0 && showProgress && (
-                      <Progress value={files[selectedFileId].progress} className="h-2" />
+                    <p className="text-sm text-primary">{progress}</p>
+                    {isLoading && (
+                      <Progress value={progress.includes('%') ? parseInt(progress) : 0} className="h-2" />
                     )}
                   </motion.div>
                 )}
 
                 {/* Error Message */}
-                {files[selectedFileId]?.error && (
+                {error && (
                   <motion.div
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
                     className="p-4 rounded-lg bg-destructive/10 text-destructive flex items-center space-x-2"
                   >
                     <AlertCircle className="h-5 w-5 flex-shrink-0" />
-                    <p>{files[selectedFileId].error}</p>
+                    <p>{error}</p>
                   </motion.div>
                 )}
 
                 {/* Analysis Results */}
-                {(files[selectedFileId]?.analysis || contracts.find(c => c.id === selectedFileId)?.analysis) && (
+                {analysis && (
                   <motion.div
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
                     className="space-y-6"
                   >
+                    {/* Property Cost Display */}
+                    {analysis.financialTerms.propertyValue && analysis.financialTerms.propertyValue !== 'Not specified' ? (
+                      <motion.div
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="bg-primary/5 rounded-xl p-8 shadow-sm border-2 border-primary/20 text-center"
+                      >
+                        <h2 className="text-3xl font-bold text-primary mb-2">Property Value</h2>
+                        <p className="text-4xl font-bold">{analysis.financialTerms.propertyValue}</p>
+                        {analysis.financialTerms.paymentSchedule && analysis.financialTerms.paymentSchedule !== 'Not specified' && (
+                          <p className="text-muted-foreground mt-2">{analysis.financialTerms.paymentSchedule}</p>
+                        )}
+                      </motion.div>
+                    ) : null}
+
                     {/* Key Insights Card */}
                     <motion.div
                       initial={{ opacity: 0, y: 20 }}
@@ -497,38 +461,12 @@ export default function Home() {
                         <Lightbulb className="h-6 w-6 text-primary" />
                         <h4 className="font-semibold text-xl">Key Insights</h4>
                       </div>
-                      <ul className="space-y-4">
-                        {(files[selectedFileId]?.analysis?.keyInsights || 
-                          contracts.find(c => c.id === selectedFileId)?.analysis?.keyInsights || []
-                        ).map((insight: string, i: number) => (
-                          <li key={i} className="flex items-start space-x-3 p-2 rounded hover:bg-muted/50 transition-colors">
-                            <span className="text-primary mt-1">•</span>
-                            <span className="text-card-foreground leading-relaxed">{insight}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    </motion.div>
-
-                    {/* Potential Issues Card */}
-                    <motion.div
-                      initial={{ opacity: 0, y: 20 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ delay: 0.1 }}
-                      className="bg-card rounded-xl p-8 shadow-sm border relative overflow-hidden"
-                    >
-                      <div className="absolute top-0 left-0 w-full h-1 bg-destructive/20" />
-                      <div className="flex items-center space-x-3 mb-6">
-                        <AlertTriangle className="h-6 w-6 text-destructive" />
-                        <h4 className="font-semibold text-xl">Potential Issues</h4>
-                      </div>
-                      <ul className="space-y-4">
-                        {(files[selectedFileId]?.analysis?.potentialIssues ||
-                          contracts.find(c => c.id === selectedFileId)?.analysis?.potentialIssues || []
-                        ).map((issue: string, i: number) => (
-                          <li key={i} className="flex items-start space-x-3 p-2 rounded hover:bg-muted/50 transition-colors">
-                            <span className="text-destructive mt-1">•</span>
-                            <span className="text-card-foreground leading-relaxed">{issue}</span>
-                          </li>
+                      {analysis.keyInsights.summary && (
+                        <p className="text-lg mb-4 text-muted-foreground">{analysis.keyInsights.summary}</p>
+                      )}
+                      <ul className="list-disc pl-5 space-y-2">
+                        {analysis.keyInsights.points.map((insight, i) => (
+                          <li key={i} className="text-lg">{insight}</li>
                         ))}
                       </ul>
                     </motion.div>
@@ -537,24 +475,80 @@ export default function Home() {
                     <motion.div
                       initial={{ opacity: 0, y: 20 }}
                       animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: 0.1 }}
+                      className="bg-card rounded-xl p-8 shadow-sm border relative overflow-hidden"
+                    >
+                      <div className="absolute top-0 left-0 w-full h-1 bg-green-500/20" />
+                      <div className="flex items-center space-x-3 mb-6">
+                        <CheckCircle2 className="h-6 w-6 text-green-500" />
+                        <h4 className="font-semibold text-xl">Recommendations</h4>
+                      </div>
+                      {analysis.recommendations.summary && (
+                        <p className="text-lg mb-4 text-muted-foreground">{analysis.recommendations.summary}</p>
+                      )}
+                      <ul className="list-disc pl-5 space-y-2">
+                        {analysis.recommendations.points.map((rec, i) => (
+                          <li key={i} className="text-lg">{rec}</li>
+                        ))}
+                      </ul>
+                    </motion.div>
+
+                    {/* Potential Issues Card */}
+                    <motion.div
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: 0.2 }}
                       className="bg-card rounded-xl p-8 shadow-sm border relative overflow-hidden"
                     >
-                      <div className="absolute top-0 left-0 w-full h-1 bg-primary/20" />
+                      <div className="absolute top-0 left-0 w-full h-1 bg-destructive/20" />
                       <div className="flex items-center space-x-3 mb-6">
-                        <CheckCircle2 className="h-6 w-6 text-primary" />
-                        <h4 className="font-semibold text-xl">Recommendations</h4>
+                        <AlertTriangle className="h-6 w-6 text-destructive" />
+                        <h4 className="font-semibold text-xl">Potential Issues</h4>
                       </div>
-                      <ul className="space-y-4">
-                        {(files[selectedFileId]?.analysis?.recommendations ||
-                          contracts.find(c => c.id === selectedFileId)?.analysis?.recommendations || []
-                        ).map((rec: string, i: number) => (
-                          <li key={i} className="flex items-start space-x-3 p-2 rounded hover:bg-muted/50 transition-colors">
-                            <span className="text-primary mt-1">•</span>
-                            <span className="text-card-foreground leading-relaxed">{rec}</span>
-                          </li>
+                      {analysis.potentialIssues.summary && (
+                        <p className="text-lg mb-4 text-muted-foreground">{analysis.potentialIssues.summary}</p>
+                      )}
+                      <ul className="list-disc pl-5 space-y-2">
+                        {analysis.potentialIssues.points.map((issue, i) => (
+                          <li key={i} className="text-lg">{issue}</li>
                         ))}
                       </ul>
+                    </motion.div>
+
+                    {/* Next Steps Card */}
+                    <motion.div
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: 0.3 }}
+                      className="bg-card rounded-xl p-8 shadow-sm border relative overflow-hidden"
+                    >
+                      <div className="absolute top-0 left-0 w-full h-1 bg-blue-500/20" />
+                      <div className="flex items-center space-x-3 mb-6">
+                        <ArrowLeft className="h-6 w-6 text-blue-500" />
+                        <h4 className="font-semibold text-xl">Next Steps</h4>
+                      </div>
+                      <div className="space-y-4">
+                        {analysis.financialTerms.additionalCosts.length > 0 && (
+                          <div>
+                            <h5 className="font-medium text-lg mb-2">Additional Costs to Consider</h5>
+                            <ul className="list-disc pl-5 space-y-2">
+                              {analysis.financialTerms.additionalCosts.map((cost, i) => (
+                                <li key={i} className="text-lg">{cost}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                        {analysis.financialTerms.financialConditions.length > 0 && (
+                          <div>
+                            <h5 className="font-medium text-lg mb-2">Financial Conditions</h5>
+                            <ul className="list-disc pl-5 space-y-2">
+                              {analysis.financialTerms.financialConditions.map((condition, i) => (
+                                <li key={i} className="text-lg">{condition}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                      </div>
                     </motion.div>
                   </motion.div>
                 )}
@@ -600,7 +594,20 @@ export default function Home() {
                   initial={{ opacity: 0, scale: 0.95 }}
                   animate={{ opacity: 1, scale: 1 }}
                   className="aspect-square rounded-xl border bg-card p-6 relative cursor-pointer hover:shadow-md transition-all"
-                  onClick={() => setSelectedFileId(id)}
+                  onClick={() => {
+                    if ('file' in data) {
+                      setFileData({
+                        name: data.name,
+                        file: data.file
+                      });
+                    } else {
+                      // For existing contracts from the database
+                      setFileData({
+                        name: data.name,
+                        analysis: data.analysis
+                      });
+                    }
+                  }}
                 >
                   <Button
                     variant="ghost"
@@ -614,12 +621,12 @@ export default function Home() {
                     <div className="mb-4">
                       <FileText className="h-8 w-8 text-primary mb-2" />
                       <h3 className="font-medium truncate">
-                        {'file' in data ? data.file.name : data.name}
+                        {'file' in data ? data.name : data.name}
                       </h3>
                       <p className="text-sm text-muted-foreground">
                         {'file' in data ? 
                           `Uploaded on ${new Date().toLocaleDateString()}` :
-                          `Uploaded on ${new Date(data.createdAt).toLocaleDateString()}`
+                          `Uploaded on ${new Date(data.createdAt || Date.now()).toLocaleDateString()}`
                         }
                       </p>
                     </div>
@@ -633,7 +640,7 @@ export default function Home() {
                           'Reviewed'
                         }
                       </div>
-                      {'file' in data && data.loading && data.progress > 0 && (
+                      {'file' in data && data.loading && data.progress && data.progress > 0 && (
                         <Progress value={data.progress} className="h-1 mt-2" />
                       )}
                     </div>
@@ -664,6 +671,88 @@ export default function Home() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {analysis && (
+        <div className="mt-8 space-y-8">
+          <h2 className="text-2xl font-bold mb-4">Contract Analysis</h2>
+          
+          {/* Key Terms */}
+          <div className="bg-card rounded-xl p-8 shadow-sm border">
+            <h3 className="text-xl font-semibold mb-4 flex items-center">
+              <FileText className="h-6 w-6 text-primary mr-2" />
+              Key Terms
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div>
+                <h4 className="font-medium mb-2">Parties Involved</h4>
+                <ul className="list-disc pl-5 space-y-1">
+                  {analysis.keyInsights.points.map((party, i) => (
+                    <li key={i}>{party}</li>
+                  ))}
+                </ul>
+              </div>
+              <div className="space-y-4">
+                {analysis.financialTerms.propertyValue && (
+                  <div>
+                    <h4 className="font-medium mb-1">Property Value</h4>
+                    <p>{analysis.financialTerms.propertyValue}</p>
+                  </div>
+                )}
+                {analysis.financialTerms.paymentSchedule && (
+                  <div>
+                    <h4 className="font-medium mb-1">Payment Schedule</h4>
+                    <p>{analysis.financialTerms.paymentSchedule}</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Financial Terms */}
+          <div className="bg-card rounded-xl p-8 shadow-sm border">
+            <h3 className="text-xl font-semibold mb-4 flex items-center">
+              <svg
+                className="h-6 w-6 text-green-600 mr-2"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                />
+              </svg>
+              Financial Terms
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="space-y-4">
+                {analysis.financialTerms.additionalCosts.length > 0 && (
+                  <div>
+                    <h4 className="font-medium mb-1">Additional Costs</h4>
+                    <ul className="list-disc pl-5 space-y-1">
+                      {analysis.financialTerms.additionalCosts.map((cost, i) => (
+                        <li key={i}>{cost}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {analysis.financialTerms.financialConditions.length > 0 && (
+                  <div>
+                    <h4 className="font-medium mb-1">Financial Conditions</h4>
+                    <ul className="list-disc pl-5 space-y-1">
+                      {analysis.financialTerms.financialConditions.map((condition, i) => (
+                        <li key={i}>{condition}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -1,27 +1,32 @@
 'use client';
 
 import { useState } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useSearchParams } from 'next/navigation';
+import { signIn } from 'next-auth/react';
 import { Button } from '@/components/ui/button';
 import { AlertCircle } from 'lucide-react';
+import Image from 'next/image';
 
 export default function SignIn() {
-  const router = useRouter();
   const searchParams = useSearchParams();
   const [isLoading, setIsLoading] = useState(false);
-  const error = searchParams.get('error');
-  const returnTo = searchParams.get('returnTo');
+  const [error, setError] = useState('');
 
-  const handleSignIn = () => {
-    setIsLoading(true);
-    const loginUrl = returnTo 
-      ? `/api/auth/login?returnTo=${encodeURIComponent(returnTo)}`
-      : '/api/auth/login';
-    window.location.href = loginUrl;
+  const handleSignIn = async () => {
+    try {
+      setIsLoading(true);
+      const callbackUrl = searchParams?.get('callbackUrl') || '/';
+      await signIn('google', {
+        callbackUrl,
+      });
+    } catch (err) {
+      setError('An error occurred during sign in');
+      setIsLoading(false);
+    }
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background py-12 px-4 sm:px-6 lg:px-8">
+    <div className="min-h-screen flex items-center justify-center bg-background py-12 px-4 sm:px-6 lg:px-8 overscroll-x-auto">
       <div className="max-w-md w-full space-y-8">
         <div className="text-center">
           <h2 className="mt-6 text-3xl font-bold text-foreground">
@@ -35,31 +40,38 @@ export default function SignIn() {
         {error && (
           <div className="p-4 rounded-lg bg-destructive/10 text-destructive flex items-center space-x-2">
             <AlertCircle className="h-5 w-5" />
-            <p>There was an error signing in. Please try again.</p>
+            <p>{error}</p>
           </div>
         )}
 
-        <div className="mt-8">
+        <div className="mt-8 space-y-4">
           <Button
             onClick={handleSignIn}
             className="w-full"
-            size="lg"
+            variant="outline"
             disabled={isLoading}
           >
-            {isLoading ? 'Signing in...' : 'Sign in with Auth0'}
+            <Image
+              src="/google.svg"
+              alt="Google"
+              width={20}
+              height={20}
+              className="mr-2"
+            />
+            {isLoading ? 'Signing in...' : 'Continue with Google'}
           </Button>
-        </div>
 
-        <p className="text-center text-sm text-muted-foreground">
-          By signing in, you agree to our{' '}
-          <a href="#" className="font-medium text-primary hover:text-primary/90">
-            Terms of Service
-          </a>{' '}
-          and{' '}
-          <a href="#" className="font-medium text-primary hover:text-primary/90">
-            Privacy Policy
-          </a>
-        </p>
+          <p className="text-center text-sm text-muted-foreground">
+            By signing in, you agree to our{' '}
+            <a href="#" className="font-medium text-primary hover:text-primary/90">
+              Terms of Service
+            </a>{' '}
+            and{' '}
+            <a href="#" className="font-medium text-primary hover:text-primary/90">
+              Privacy Policy
+            </a>
+          </p>
+        </div>
       </div>
     </div>
   );
